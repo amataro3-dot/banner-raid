@@ -144,4 +144,7 @@ const I18N = {
   'ゲージがたまっていない': ['The gauge isn’t full yet', '게이지가 아직 안 찼어요'],
   '旗を取った！ コインが多くたまる': ['Flag taken! You earn extra coins', '깃발 획득! 코인이 더 쌓인다'],
   '旗を取られた…': ['The enemy took a flag…', '깃발을 빼앗겼다…'],
+  // --- v=10(CPU もキャラで戦う) ---
+  '自分': ['You', '나'],
+  'タップでスタート': ['Tap to start', '탭해서 시작'],
 };

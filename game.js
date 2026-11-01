@@ -18,7 +18,7 @@ function img(key) {
   return IMG[key];
 }
 const imgSrc = key => img(key).src;
-UNIT_KEYS.forEach(k => UNITS[k].stats.forEach(st => img(st.img))); Object.keys(ENEMIES).forEach(k => img('e-' + k));
+UNIT_KEYS.forEach(k => UNITS[k].stats.forEach(st => img(st.img)));   // CPU軍(ゴブリンたち)の絵は v=10 から使っていない(しまってある)
 
 /* ---------- 計算のきまり ---------- */
 const TICK = 1 / 30;
@@ -41,12 +41,13 @@ function newBattle(seed) {
     tick: 0, t: 0, rng: makeRng(seed || 1), uid: 1, lanes: laneCount,
     coin: [START_COIN, START_COIN * 0.6], castle: [CASTLE_HP, CASTLE_HP], gauge: [0, 0],
     flags: Array.from({ length: laneCount }, () => ({ own: -1, prog: 0 })),   // prog: +1 で自分、-1 で相手のもの
-    cd: [{}, {}], lv: [{}, {}], deck: [picks.slice(), Object.keys(ENEMIES)], kind: ['u', 'e'],
+    cd: [{}, {}], lv: [{}, {}], deck: [picks.slice(), []], kind: ['u', 'u'],   // kind 'e' にすると CPU軍(ゴブリンたち)で戦う
     rate: [1, CPU_LEVELS[cpuLevel]],
     units: [], fx: [], over: null, kills: [0, 0], spent: [0, 0],
     ai: { next: null, think: 0 },
     speed: 1, paused: false,
   };
+  B.deck[1] = cpuDeck(B.rng);
 }
 const lvOf = (side, k) => B.lv[side][k] || 1;
 /* いまのレベルの数値(CPU軍は HP・攻撃を ENEMY_LV 倍) */
@@ -222,14 +223,35 @@ function flagStep(dt) {
 }
 
 /* ---------- CPU(ひとりで練習) ---------- */
-const AI_WEIGHT = { goblin: 30, wolf: 18, skeleton: 22, orc: 16, assassin: 12 };
+/* CPU の4体: 10体からランダム。戦わないキャラ(マーチャント・エンジニア)は1体まで、戦うキャラを最低1体は入れる */
+function cpuDeck(rng) {
+  const keys = UNIT_KEYS.slice(), out = [];
+  while (out.length < 4) {
+    const k = keys.splice(Math.floor(rng() * keys.length), 1)[0];
+    const st = UNITS[k].stats[0], passive = !!(st.coin || st.repair);
+    if (passive && out.some(o => UNITS[o].stats[0].coin || UNITS[o].stats[0].repair)) continue;
+    out.push(k);
+  }
+  if (!out.some(k => UNITS[k].role === 'atk' || UNITS[k].role === 'tank')) out[3] = 'sword';
+  return out;
+}
+/* 役割ごとの出しやすさ。戦わないキャラは、出ていないときだけ */
+const AI_WEIGHT = { atk: 30, tank: 24, heal: 14, sup: 12 };
 function cpuPick() {
-  const ks = Object.keys(AI_WEIGHT).filter(k => B.t > 40 || k !== 'assassin');
-  let sum = 0; for (const k of ks) sum += AI_WEIGHT[k];
+  const ks = B.deck[1].filter(k => {
+    const st = UNITS[k].stats[0];
+    if (st.coin || st.repair) return B.t > 15 && !B.units.some(u => u.side === 1 && u.k === k);
+    if (st.heal || st.haste) return B.units.some(u => u.side === 1 && !u.d.heal && !u.d.haste && !u.d.coin && !u.d.repair);   // 前に立つ味方がいるときだけ
+    return true;
+  });
+  if (!ks.length) return B.deck[1][0];
+  let sum = 0; for (const k of ks) sum += AI_WEIGHT[UNITS[k].role];
   let r = B.rng() * sum;
-  for (const k of ks) { r -= AI_WEIGHT[k]; if (r < 0) return k; }
+  for (const k of ks) { r -= AI_WEIGHT[UNITS[k].role]; if (r < 0) return k; }
   return ks[0];
 }
+/* 押されているときに急いで出す: いちばん安い、戦うキャラ */
+const cpuCheap = () => B.deck[1].filter(k => UNITS[k].role === 'atk' || UNITS[k].role === 'tank').sort((a, b) => UNITS[a].cost - UNITS[b].cost)[0];
 function cpuThink(dt) {
   const A = B.ai;
   A.think -= dt; if (A.think > 0) return;
@@ -245,7 +267,8 @@ function cpuThink(dt) {
   }
   // 押されていたら、安いのを急いで出す
   const danger = B.units.some(u => u.side === 0 && fromHome(1, u.p) <= 30);
-  if (danger && canSpawn(1, 'goblin') && B.rng() < 0.5) { spawn(1, 'goblin', cpuLane(true)); return; }
+  const cheap = cpuCheap();
+  if (danger && cheap && canSpawn(1, cheap) && B.rng() < 0.5) { spawn(1, cheap, cpuLane(true)); return; }
   if (!A.next || B.cd[1][A.next] > 3) A.next = cpuPick();
   if (canSpawn(1, A.next)) { spawn(1, A.next, cpuLane(false)); A.next = null; return; }
   // コインがあまっていたら、ときどき強化
@@ -329,7 +352,7 @@ function draft() {
 }
 
 /* ---------- 画面: 対戦 ---------- */
-let cv, cx, W = 360, H = 480, raf = 0, lastT = 0, acc = 0;
+let cv, cx, W = 360, H = 480, raf = 0, lastT = 0, acc = 0, intro = 0;
 function play() {
   newBattle((Date.now() & 0x7fffffff) | 1);
   app.innerHTML = `
@@ -337,7 +360,7 @@ function play() {
     <div class="hp foe"><span>${T('相手の城')}</span><i><b id="hc"></b></i><em id="hcn"></em></div>
     <div class="dim" id="ht">5:00</div>
   </div>
-  <div class="board"><canvas id="cv"></canvas><div id="toasts"></div></div>
+  <div class="board"><canvas id="cv"></canvas><div id="toasts"></div><div id="intro" class="intro"></div></div>
   <div class="hud">
     <div class="hp me"><span>${T('自分の城')}</span><i><b id="hb"></b></i><em id="hbn"></em></div>
     <div class="coin">💰 <b id="hm">0</b></div>
@@ -381,6 +404,10 @@ function play() {
   $('spd').onclick = () => { B.speed = B.speed === 1 ? 2 : 1; $('spd').textContent = '▶︎×' + B.speed; };
   $('pause').onclick = () => { B.paused = !B.paused; $('pause').textContent = B.paused ? '▶︎' : '⏸'; };
   $('quit').onclick = () => { B.over = 'quit'; };
+  // 最初に、おたがいの4体を見せる(タップか3秒で始まる)
+  intro = 3;
+  $('intro').innerHTML = `<div class="dim">CPU</div><div class="team foe">${teamImgs(1)}</div><div class="vs">VS</div><div class="team">${teamImgs(0)}</div><div class="dim">${T('自分')}</div><div class="small">${T('タップでスタート')}</div>`;
+  $('intro').onclick = () => { intro = 0; };
   lastT = performance.now(); acc = 0;
   raf = requestAnimationFrame(loop);
 }
@@ -421,7 +448,9 @@ window.addEventListener('resize', () => { if (B && cv && document.body.contains(
 function stopLoop() { if (raf) cancelAnimationFrame(raf); raf = 0; if (drag) { drag.g.remove(); drag = null; } }
 function loop(now) {
   const dt = Math.min(0.1, (now - lastT) / 1000); lastT = now;
-  if (!B.paused && !B.over) { acc += dt * B.speed; while (acc >= TICK) { sim(); acc -= TICK; if (B.over) break; } }
+  if (intro > 0) { intro -= dt; if (intro <= 0 && $('intro')) $('intro').hidden = true; }
+  else if ($('intro') && !$('intro').hidden) $('intro').hidden = true;
+  if (!B.paused && !B.over && intro <= 0) { acc += dt * B.speed; while (acc >= TICK) { sim(); acc -= TICK; if (B.over) break; } }
   for (const f of B.fx) if (f.flagGet !== undefined && !f.told) { f.told = true; toast(f.flagGet === 0 ? T('旗を取った！ コインが多くたまる') : T('旗を取られた…')); }
   for (const t of toasts) t.t -= dt;
   toasts = toasts.filter(t => t.t > 0);
@@ -489,6 +518,9 @@ function draw() {
     const im = img(u.img);
     const w = SPR() * (u.d.size || 1), h = w * 100 / 176;
     const x = X(u.x, u.lane), y = Y(u.p) - (u.act > 0 ? (u.side ? -3 : 3) : 0);
+    // 足もとの影: 自分は青、相手は赤
+    cx.fillStyle = u.side ? 'rgba(220,40,40,.55)' : 'rgba(40,130,230,.55)';
+    cx.beginPath(); cx.ellipse(x - w * 0.08, y + h * 0.42, w * 0.26, h * 0.13, 0, 0, 7); cx.fill();
     if (u.slowT > 0) { cx.fillStyle = 'rgba(124,200,255,.35)'; cx.beginPath(); cx.ellipse(x, y, w * 0.3, h * 0.45, 0, 0, 7); cx.fill(); }
     if (im.complete && im.naturalWidth) {
       if (u.hitT > 0) cx.globalAlpha = 0.55;
@@ -545,6 +577,7 @@ function bar(x, y, p, col, w) {
 }
 
 /* ---------- 画面: 結果 ---------- */
+const teamImgs = side => B.deck[side].map(k => `<img src="${imgSrc(UNITS[k].stats[lvOf(side, k) - 1].img)}" alt="">`).join('');
 function end() {
   if (!B || !B.over) return;
   const s = Math.floor(B.t), r = B.over;
@@ -556,7 +589,8 @@ function end() {
     <div>${why}</div>
     <div class="dim">${T('自分の城 {a} / 相手の城 {b}', { a: Math.ceil(B.castle[0]), b: Math.ceil(B.castle[1]) })}</div>
     <div class="dim">${T('時間 {m}分{s}秒・倒した敵 {k}', { m: Math.floor(s / 60), s: s % 60, k: B.kills[0] })}</div>
-    <div class="team">${picks.map(k => `<img src="${imgSrc(UNITS[k].stats[lvOf(0, k) - 1].img)}" alt="">`).join('')}</div>
+    <div class="vsrow"><span class="dim small">${T('自分')}</span><div class="team">${teamImgs(0)}</div></div>
+    <div class="vsrow"><span class="dim small">CPU</span><div class="team foe">${teamImgs(1)}</div></div>
   </div>
   <button id="again" class="wide">${T('同じキャラでもう一回')}</button>
   <button id="re" class="sub">${T('キャラを選びなおす')}</button>
