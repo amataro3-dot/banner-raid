@@ -156,6 +156,12 @@ function sim() {
       }
     } else if (d.haste) {
       stop = nd <= d.range || castleGap <= d.range;
+      // バードも弱く攻撃する(いちばん近い相手、いなければ城)
+      if (d.dmg && u.atkT <= 0) {
+        const inR = foes.filter(([v, g]) => g <= d.range).sort((a1, a2) => a1[1] - a2[1] || a1[0].id - a2[0].id);
+        if (inR.length) { hurt(inR[0][0], d.dmg, s); B.fx.push({ line: '#c9a6ff', p: u.p, x: u.x, p2: inR[0][0].p, x2: inR[0][0].x, l: u.lane, t: 0.15 }); u.atkT = d.rate; u.act = 0.2; }
+        else if (castleGap <= d.range) { B.castle[o] = Math.max(0, B.castle[o] - d.dmg); u.atkT = d.rate; u.act = 0.2; }
+      }
     } else if (d.slow) {
       stop = nd <= d.range || castleGap <= d.range;
       const inR = foes.filter(([v, g]) => g <= d.range);

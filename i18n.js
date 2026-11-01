@@ -68,6 +68,7 @@ const I18N = {
   'マーチャント': ['Merchant', '머천트'],
   '受けたダメージの一部をはね返す。少しずつ自分も回復': ['Reflects part of the damage taken. Slowly heals itself', '받은 피해의 일부를 되돌려준다. 조금씩 스스로 회복'],
   'まわりの味方の攻撃を速くする': ['Speeds up nearby allies’ attacks', '주변 아군의 공격을 빠르게 한다'],
+  'まわりの味方の攻撃を速くする。自分も弱く攻撃する': ['Speeds up nearby allies’ attacks. Also attacks weakly itself', '주변 아군의 공격을 빠르게 한다. 자신도 약하게 공격한다'],
   // --- 対戦 ---
   'コインが足りない': ['Not enough coins', '코인이 부족해요'],
   // --- 結果 ---
