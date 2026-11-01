@@ -1,4 +1,4 @@
-/* BANNER RAID の数値(キャラ10体・Lv3まで。v=11 で強さを調整)。強さの調整はここだけ直せばよい。
+/* BANNER RAID の数値(キャラ10体・Lv3まで。v=11・v=14 で強さを調整)。強さの調整はここだけ直せばよい。
    - 道の長さは 100(自分の城 0 → 相手の城 100)。range・spd もこの長さで数える(spd は 1秒に進む長さ)。
    - rate は「何秒に1回」。cd は出撃したあと、次に出せるまでの秒数。size は絵の大きさ(1 がふつう)。
    - キャラは lv[0]〜lv[2] が Lv1〜Lv3。Lv2・Lv3 は、前のレベルから変わるところだけ書く。
@@ -25,10 +25,12 @@ const FLAG = { at: 50, zone: 12, capture: 3, coin: 6 };
    up: [Lv2 にする値段, Lv3 にする値段]
    とくべつな力: crit(会心の確率) / pierce(前に並んだ何体まで当たる) / splash(まわりにも当たる長さ) / slowOnHit(当てた敵を遅くする)
    sniper(城とHPの多い敵をねらう) / reflect(受けたダメージをはね返す割合) / regen(1秒に回復) / heal・healAll(回復)
-   haste(まわりの攻撃を速く) / hasteMove(まわりの歩きを速く) / coin(1秒にふえるコイン) / repair(1秒に城を直す) / gauge(城の一撃が速くたまる割合) / stopAt(城からこの長さで止まる) */
+   haste(まわりの攻撃を速く) / hasteMove(まわりの歩きを速く) / coin(1秒にふえるコイン) / repair(1秒に城を直す) / gauge(城の一撃が速くたまる割合) / stopAt(城からこの長さで止まる)
+   build(城が満タンなら旗の手前にバリケードを建てて、もどる) / cdCut(出ているあいだ、持ち主の出撃の待ち時間をこの割合だけ短く)
+   戦わないキャラ(coin・repair)は、前に味方がいるときだけ進む(v=14) */
 const UNITS = {
-  sword: { role: 'atk', cost: 50, cd: 3, up: [50, 100], lv: [
-    { name: 'ソード', img: 'sword', hp: 260, dmg: 45, rate: 1.0, range: 6, spd: 9, desc: '近接。1体に大ダメージ。HPは低い。安くてすぐ出せる' },
+  sword: { role: 'atk', cost: 60, cd: 3, up: [60, 120], lv: [
+    { name: 'ソード', img: 'sword', hp: 230, dmg: 45, rate: 1.0, range: 6, spd: 9, desc: '近接。1体に大ダメージ。HPは低い。安くてすぐ出せる' },
     { dmg: 60, desc: '攻撃力アップ' },
     { crit: 0.25, desc: 'ときどき2倍ダメージ(会心の一撃)' } ] },
   archer: { role: 'atk', cost: 65, cd: 4, up: [65, 130], lv: [
@@ -62,13 +64,16 @@ const UNITS = {
   merchant: { role: 'sup', cost: 100, cd: 15, up: [100, 200], lv: [
     { name: 'マーチャント', img: 'merchant', hp: 220, range: 0, spd: 3, coin: 5, stopAt: 10, desc: '戦わない。出撃しているあいだ、コインのたまる速さが上がる' },
     { coin: 8, desc: '稼ぐコインが増える' },
-    { coin: 12, desc: 'さらに増える' } ] },
+    { coin: 12, cdCut: 0.3, desc: 'さらに増える。出撃の待ち時間も短くなる' } ] },
   engineer: { role: 'sup', cost: 80, cd: 12, up: [80, 160], lv: [
-    { name: 'エンジニア', img: 'engineer', hp: 200, range: 0, spd: 3, repair: 12, stopAt: 6, desc: '戦わない。城のそばで、城を少しずつ直す' },
+    { name: 'エンジニア', img: 'engineer', hp: 200, range: 0, spd: 3, repair: 12, stopAt: 6, build: true, desc: '戦わない。城が無事なら旗の手前にバリケードを建てて、もどる。城がけずられたら直す' },
     { repair: 20, desc: '城を直す量が増える' },
     { gauge: 0.5, desc: '城の一撃のゲージも速くたまる' } ] },
 };
 const UNIT_KEYS = Object.keys(UNITS);
+
+/* バリケード(v=14): エンジニアが旗の手前(旗から gap だけ自分の城より)に建てる。攻撃しない。敵だけを止める。1本の道に1つまで。旗の数には入らない */
+const BARRICADE = { hp: 800, gap: 4 };
 const ROLE_NAME = { atk: 'アタッカー', tank: 'タンク', heal: 'ヒーラー', sup: 'サポート' };
 
 /* レベルごとの数値をまとめる(Lv1 から順に、変わるところを重ねる) */

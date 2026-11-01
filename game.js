@@ -88,7 +88,7 @@ function spawn(p, k, lane) {
   if (!canSpawn(p, k)) return false;
   const P = B.pl[p], d = defOf(p, k), side = P.side;
   P.coin -= d.cost; P.spent += d.cost;
-  P.cd[k] = d.cd;
+  P.cd[k] = d.cd * (1 - B.units.reduce((m, w) => (w.owner === p && w.hp > 0 && w.d.cdCut ? Math.max(m, w.d.cdCut) : m), 0));   // マーチャント Lv3
   lane = Math.max(0, Math.min(B.lanes - 1, lane | 0));
   B.units.push({ id: B.uid++, side, owner: p, k, d, lane, img: d.img, lv: lvOf(p, k), p: homeP(side) + DIR[side] * 3, hp: d.hp, max: d.hp, atkT: 0.3, slowT: 0, x: B.rng() * 2 - 1, hitT: 0, act: 0 });
   return true;
@@ -145,7 +145,7 @@ function sim() {
 
   const live = B.units.filter(u => u.hp > 0);
   for (const u of live) {
-    if (u.hp <= 0) continue;
+    if (u.hp <= 0 || u.wall) continue;   // バリケードは何もしない
     const d = u.d, s = u.side, dir = DIR[s], o = 1 - s;
     if (d.regen) u.hp = Math.min(u.max, u.hp + d.regen * dt);
     if (u.slowT > 0) u.slowT -= dt;
@@ -167,10 +167,27 @@ function sim() {
 
     let stop = false;
     if (d.coin || d.repair) {
-      stop = fromHome(s, u.p) >= d.stopAt || nd <= 3;
+      // 戦わないキャラ: 前に味方がいるときだけ進む。エンジニアは城が満タンなら旗の手前にバリケードを建てて、もどる
+      const me = fromHome(s, u.p);
+      let goal = d.stopAt;
+      if (d.build) {
+        const wall = live.some(w => w.wall && w.side === s && w.lane === u.lane && w.hp > 0);
+        if (u.back && !wall && me <= d.stopAt + 1) u.back = false;
+        if (!u.back && !wall && B.castle[s] >= B.castleMax[s]) goal = FLAG.at - BARRICADE.gap;
+        if (goal > d.stopAt && me >= goal - 0.5) {
+          B.units.push({ id: B.uid++, side: s, owner: u.owner, k: 'barricade', d: { hp: BARRICADE.hp, cost: 0, range: 0, spd: 0, wall: true }, lane: u.lane, img: '', lv: 1, p: u.p, hp: BARRICADE.hp, max: BARRICADE.hp, atkT: 0, slowT: 0, x: 0, hitT: 0, act: 0, wall: true });
+          B.fx.push({ txt: '🔨', p: u.p, x: 0, l: u.lane, t: 0.6 });
+          u.back = true; goal = d.stopAt;
+        }
+      }
+      stop = true;   // 動きはここで決める(下の「進む」は使わない)
+      const cover = live.some(a => a.side === s && a.lane === u.lane && a.hp > 0 && !a.wall && !a.d.coin && !a.d.repair && fromHome(s, a.p) > me + 2);
+      if (me < goal - 0.5 && cover && nd > 3) u.p += dir * d.spd * slowF * dt;
+      else if (me > goal + 0.5) u.p -= dir * d.spd * slowF * dt;
+      u.p = Math.max(0, Math.min(LANE, u.p));
     } else if (d.heal) {
       stop = nd <= d.range || castleGap <= d.range;
-      const hurtAllies = live.filter(a => a.side === s && a.hp > 0 && a.lane === u.lane && a.hp < a.max && Math.abs(a.p - u.p) <= d.range);
+      const hurtAllies = live.filter(a => a.side === s && a.hp > 0 && !a.wall && a.lane === u.lane && a.hp < a.max && Math.abs(a.p - u.p) <= d.range);
       if (hurtAllies.length && u.atkT <= 0) {
         if (d.healAll) hurtAllies.forEach(a => { a.hp = Math.min(a.max, a.hp + d.heal); B.fx.push({ ring: '#4caf50', p: a.p, x: a.x, l: u.lane, t: 0.35 }); });
         else { const a = hurtAllies.sort((a1, a2) => a1.hp / a1.max - a2.hp / a2.max || a1.id - a2.id)[0]; a.hp = Math.min(a.max, a.hp + d.heal); B.fx.push({ line: '#4caf50', p: u.p, x: u.x, p2: a.p, x2: a.x, l: u.lane, t: 0.25 }); }
@@ -241,7 +258,7 @@ function sim() {
 function flagStep(dt) {
   for (let l = 0; l < B.lanes; l++) {
     const f = B.flags[l]; let n0 = 0, n1 = 0;
-    for (const u of B.units) if (u.hp > 0 && u.lane === l && !u.d.coin && !u.d.repair && Math.abs(u.p - FLAG.at) <= FLAG.zone) { if (u.side === 0) n0++; else n1++; }
+    for (const u of B.units) if (u.hp > 0 && u.lane === l && !u.d.coin && !u.d.repair && !u.wall && Math.abs(u.p - FLAG.at) <= FLAG.zone) { if (u.side === 0) n0++; else n1++; }
     if (n0 !== n1) f.prog = Math.max(-1, Math.min(1, f.prog + Math.sign(n0 - n1) * dt / FLAG.capture));
     const was = f.own;
     if (f.prog >= 1) f.own = 0; else if (f.prog <= -1) f.own = 1;
@@ -569,6 +586,7 @@ function draw() {
   // キャラ(奥=上から順に)
   const us = B.units.slice().sort((a, b) => Y(a.p) - Y(b.p) || a.id - b.id);
   for (const u of us) {
+    if (u.wall) { fence(u); continue; }
     const im = img(u.img);
     const w = SPR() * (u.d.size || 1), h = w * 100 / 176;
     const x = X(u.x, u.lane), y = Y(u.p) - (u.act > 0 ? (u.side !== MS ? -3 : 3) : 0);
@@ -613,6 +631,21 @@ function flagDraw(l) {
   cx.fillStyle = 'rgba(0,0,0,.4)'; cx.fillRect(bx, by, w, 4);
   if (prog > 0) { cx.fillStyle = '#3fa9f5'; cx.fillRect(x, by, w / 2 * prog, 4); }
   if (prog < 0) { cx.fillStyle = '#e74c3c'; cx.fillRect(x + w / 2 * prog, by, -w / 2 * prog, 4); }
+}
+/* バリケード(木の柵)。絵は使わず、キャンバスでかく */
+function fence(u) {
+  const w = ROAD() * 0.8, h = SPR() * 0.3, x = laneX(VL(u.lane)), y = Y(u.p);
+  if (u.hitT > 0) cx.globalAlpha = 0.6;
+  cx.fillStyle = u.side !== MS ? 'rgba(220,40,40,.45)' : 'rgba(40,130,230,.45)';
+  cx.fillRect(x - w / 2, y + h * 0.35, w, h * 0.22);
+  cx.fillStyle = '#8a5a2b'; cx.strokeStyle = '#4a2f15'; cx.lineWidth = 1.5;
+  for (const yy of [y - h * 0.15, y + h * 0.15]) { cx.fillRect(x - w / 2, yy - h * 0.08, w, h * 0.16); cx.strokeRect(x - w / 2, yy - h * 0.08, w, h * 0.16); }
+  for (let i = 0; i < 5; i++) {
+    const px = x - w / 2 + (i + 0.5) * w / 5, pw = w / 9;
+    cx.beginPath(); cx.moveTo(px - pw / 2, y + h * 0.4); cx.lineTo(px - pw / 2, y - h * 0.35); cx.lineTo(px, y - h * 0.55); cx.lineTo(px + pw / 2, y - h * 0.35); cx.lineTo(px + pw / 2, y + h * 0.4); cx.closePath(); cx.fill(); cx.stroke();
+  }
+  cx.globalAlpha = 1;
+  bar(x, y - h * 0.55 - 6, u.hp / u.max, u.side !== MS ? '#e74c3c' : '#3fa9f5', w * 0.6);
 }
 function castle(y, side) {
   const w = B.lanes === 1 ? W * 0.5 : W * 0.86, h = H * 0.07, x = W / 2 - w / 2, top = side ? y - h * 1.05 : y - h * 0.05;

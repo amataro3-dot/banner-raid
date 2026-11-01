@@ -133,8 +133,10 @@ const I18N = {
   '攻撃だけでなく、歩く速さも上がる': ['Boosts walking speed as well as attacks', '공격뿐 아니라 걷는 속도도 오른다'],
   '稼ぐコインが増える': ['Earns more coins', '버는 코인이 늘어난다'],
   'さらに増える': ['Earns even more', '더욱 늘어난다'],
+  'さらに増える。出撃の待ち時間も短くなる': ['Earns even more, and your units recharge faster', '더욱 늘어난다. 출격 대기 시간도 짧아진다'],
   'エンジニア': ['Engineer', '엔지니어'],
   '戦わない。城のそばで、城を少しずつ直す': ['Doesn’t fight. Stays by the castle and slowly repairs it', '싸우지 않는다. 성 옆에서 성을 조금씩 고친다'],
+  '戦わない。城が無事なら旗の手前にバリケードを建てて、もどる。城がけずられたら直す': ['Doesn’t fight. If the castle is unhurt, builds a barricade before the flag and comes back. Repairs the castle when it is damaged', '싸우지 않는다. 성이 멀쩡하면 깃발 앞에 바리케이드를 세우고 돌아온다. 성이 깎이면 고친다'],
   '城を直す量が増える': ['Repairs more', '성을 고치는 양이 늘어난다'],
   '城の一撃のゲージも速くたまる': ['Also charges the Castle Strike gauge faster', '성의 일격 게이지도 빨리 찬다'],
   // --- v=9(旗・道を選ぶ城の一撃) ---
