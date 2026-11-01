@@ -31,6 +31,8 @@ button.mini{padding:7px 10px;font-size:13px}
 .ucard .nm{font-weight:800;font-size:14px}
 .ucard .rl{font-size:11px;font-weight:700}
 .ucard .ds{font-size:10px;line-height:1.35;opacity:.8}
+.ucard .ev{display:flex;align-items:center;gap:3px;font-size:10px;line-height:1.3;font-weight:700;color:var(--sup);text-align:left}
+.ucard .ev img{width:36px;flex:none;image-rendering:pixelated}
 .ucard.on{background:color-mix(in srgb,var(--gold) 22%,var(--card));border-color:var(--gold);box-shadow:0 0 0 2px var(--gold)}
 .r-atk .rl{color:var(--atk)}.r-tank .rl{color:var(--tank)}.r-heal .rl{color:var(--heal)}.r-sup .rl{color:var(--sup)}
 
@@ -49,6 +51,13 @@ button.mini{padding:7px 10px;font-size:13px}
 .toast{background:rgba(30,20,10,.82);color:#fff;font-size:13px;font-weight:700;padding:4px 10px;border-radius:12px}
 .row{display:flex;justify-content:center;align-items:center;flex-wrap:wrap}
 .pal{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:6px 0}
+.slot{position:relative;min-width:0}
+.slot .pb{width:100%}
+.up{position:absolute;top:-6px;right:-4px;z-index:2;margin:0;padding:2px 5px;min-width:30px;border-radius:9px;background:#2e7d32;color:#fff;font-size:12px;line-height:1.1;display:flex;flex-direction:column;align-items:center;box-shadow:0 1px 3px rgba(0,0,0,.35)}
+.up small{font-size:10px;font-variant-numeric:tabular-nums}
+.up:disabled{opacity:.5}
+.up.max{background:var(--gold);color:#2a1d0a;opacity:1}
+.lvb{font-size:11px;color:var(--ac)}
 .pb{position:relative;overflow:hidden;touch-action:none;-webkit-touch-callout:none;margin:0;padding:4px 0 3px;display:flex;flex-direction:column;align-items:center;background:var(--card);color:var(--tx);border:2px solid var(--bd);font-size:13px;font-variant-numeric:tabular-nums}
 .pb img{width:100%;max-width:92px;aspect-ratio:176/100;image-rendering:pixelated;pointer-events:none}
 .pb span{position:relative;z-index:1}
