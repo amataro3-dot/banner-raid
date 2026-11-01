@@ -27,8 +27,11 @@ function makeRng(seed) {   // mulberry32(同じ種なら、どのスマホでも
   return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 }
 const DIR = [1, -1];
-const homeP = s => (s === 0 ? 0 : LANE);
-const fromHome = (s, p) => (s === 0 ? p : LANE - p);   // 自分の城からの長さ
+/* 道 l の城の前(せり出しぶん cut を足す)。l をわたさないときは、城そのもの(0 と LANE) */
+const cutOf = l => (l === undefined || !B || !B.lay ? 0 : B.lay[l].cut);
+const homeP = (s, l) => (s === 0 ? cutOf(l) : LANE - cutOf(l));
+const fromHome = (s, p, l) => (s === 0 ? p - cutOf(l) : LANE - cutOf(l) - p);   // 道 l で、自分の城の前からの長さ
+const clampP = (p, l) => Math.max(cutOf(l), Math.min(LANE - cutOf(l), p));
 
 /* ---------- 対戦の状態 ---------- */
 let B = null;
@@ -49,7 +52,8 @@ function newBattle(seed, opt) {
   B = {
     tick: 0, t: 0, rng: makeRng(seed || 1), uid: 1, lanes, pl,
     castleMax: size.map(n => CASTLE_HP * n), castle: size.map(n => CASTLE_HP * n), gauge: [0, 0],
-    flags: Array.from({ length: lanes }, () => ({ own: -1, prog: 0 })),   // prog: +1 で side 0、-1 で side 1 のもの
+    lay: LANE_SET[lanes],   // 道ごとの形と旗の特典
+    flags: LANE_SET[lanes].map(L => ({ own: -1, prog: 0, perk: L.perk })),   // prog: +1 で side 0、-1 で side 1 のもの
     cpu: !on, online: !!on,
     units: [], fx: [], over: null, kills: [0, 0],
     ai: { next: null, think: 0, easy: cpuLevel === 'easy' },
@@ -90,7 +94,7 @@ function spawn(p, k, lane) {
   P.coin -= d.cost; P.spent += d.cost;
   P.cd[k] = d.cd * (1 - B.units.reduce((m, w) => (w.owner === p && w.hp > 0 && w.d.cdCut ? Math.max(m, w.d.cdCut) : m), 0));   // マーチャント Lv3
   lane = Math.max(0, Math.min(B.lanes - 1, lane | 0));
-  B.units.push({ id: B.uid++, side, owner: p, k, d, lane, img: d.img, lv: lvOf(p, k), p: homeP(side) + DIR[side] * 3, hp: d.hp, max: d.hp, atkT: 0.3, slowT: 0, x: B.rng() * 2 - 1, hitT: 0, act: 0 });
+  B.units.push({ id: B.uid++, side, owner: p, k, d, lane, img: d.img, lv: lvOf(p, k), p: homeP(side, lane) + DIR[side] * 3, hp: d.hp, max: d.hp, atkT: 0.3, slowT: 0, x: B.rng() * 2 - 1, hitT: 0, act: 0 });
   return true;
 }
 
@@ -99,10 +103,10 @@ function strike(side, lane) {
   if (B.over || B.gauge[side] < STRIKE.charge) return false;
   lane = Math.max(0, Math.min(B.lanes - 1, lane | 0));
   B.gauge[side] = 0;
-  for (const u of B.units) if (u.side !== side && u.hp > 0 && u.lane === lane && fromHome(side, u.p) <= STRIKE.reach) {
+  for (const u of B.units) if (u.side !== side && u.hp > 0 && u.lane === lane && fromHome(side, u.p, lane) <= STRIKE.reach) {
     hurt(u, STRIKE.dmg, side);
     u.p += DIR[1 - side] * -STRIKE.push;   // 城から遠ざける
-    u.p = Math.max(0, Math.min(LANE, u.p));
+    u.p = clampP(u.p, lane);
   }
   B.fx.push({ strike: side, l: lane, t: 0.6 });
   return true;
@@ -136,7 +140,7 @@ function sim() {
   B.pl.forEach((P, i) => {
     let bonus = 0;
     for (const u of B.units) if (u.owner === i && u.hp > 0) bonus += u.d.coin || 0;
-    for (const f of B.flags) if (f.own === P.side) bonus += FLAG.coin;
+    for (const f of B.flags) if (f.own === P.side && f.perk === 'coin') bonus += PERK.coin;   // コインの旗
     P.coin = Math.min(COIN_MAX, P.coin + (COIN_PER_SEC * P.rate + bonus) * dt);
     for (const k in P.cd) if (P.cd[k] > 0) P.cd[k] -= dt;
   });
@@ -144,6 +148,7 @@ function sim() {
   if (B.cpu) cpuThink(dt);
 
   const live = B.units.filter(u => u.hp > 0);
+  const power = [0, 1].map(s => 1 + B.flags.filter(f => f.own === s && f.perk === 'power').length * PERK.power);   // 力の旗
   for (const u of live) {
     if (u.hp <= 0 || u.wall) continue;   // バリケードは何もしない
     const d = u.d, s = u.side, dir = DIR[s], o = 1 - s;
@@ -159,7 +164,7 @@ function sim() {
       const g = (v.p - u.p) * dir;
       if (g >= -1.5) { foes.push([v, g]); if (g < nd) { nd = g; near = v; } }
     }
-    const castleGap = (homeP(o) - u.p) * dir;
+    const castleGap = (homeP(o, u.lane) - u.p) * dir;
 
     let haste = 1, hasteMove = 1;
     for (const b of live) if (b.side === s && b !== u && b.d.haste && b.hp > 0 && b.lane === u.lane && Math.abs(b.p - u.p) <= b.d.range) { haste = Math.max(haste, b.d.haste); hasteMove = Math.max(hasteMove, b.d.hasteMove || 1); }
@@ -168,12 +173,12 @@ function sim() {
     let stop = false;
     if (d.coin || d.repair) {
       // 戦わないキャラ: 前に味方がいるときだけ進む。エンジニアは城が満タンなら旗の手前にバリケードを建てて、もどる
-      const me = fromHome(s, u.p);
+      const me = fromHome(s, u.p, u.lane);
       let goal = d.stopAt;
       if (d.build) {
         const wall = live.some(w => w.wall && w.side === s && w.lane === u.lane && w.hp > 0);
         if (u.back && !wall && me <= d.stopAt + 1) u.back = false;
-        if (!u.back && !wall && B.castle[s] >= B.castleMax[s]) goal = FLAG.at - BARRICADE.gap;
+        if (!u.back && !wall && B.castle[s] >= B.castleMax[s]) goal = fromHome(s, FLAG.at, u.lane) - BARRICADE.gap;
         if (goal > d.stopAt && me >= goal - 0.5) {
           B.units.push({ id: B.uid++, side: s, owner: u.owner, k: 'barricade', d: { hp: BARRICADE.hp, cost: 0, range: 0, spd: 0, wall: true }, lane: u.lane, img: '', lv: 1, p: u.p, hp: BARRICADE.hp, max: BARRICADE.hp, atkT: 0, slowT: 0, x: 0, hitT: 0, act: 0, wall: true });
           B.fx.push({ txt: '🔨', p: u.p, x: 0, l: u.lane, t: 0.6 });
@@ -181,10 +186,10 @@ function sim() {
         }
       }
       stop = true;   // 動きはここで決める(下の「進む」は使わない)
-      const cover = live.some(a => a.side === s && a.lane === u.lane && a.hp > 0 && !a.wall && !a.d.coin && !a.d.repair && fromHome(s, a.p) > me + 2);
+      const cover = live.some(a => a.side === s && a.lane === u.lane && a.hp > 0 && !a.wall && !a.d.coin && !a.d.repair && fromHome(s, a.p, u.lane) > me + 2);
       if (me < goal - 0.5 && cover && nd > 3) u.p += dir * d.spd * slowF * dt;
       else if (me > goal + 0.5) u.p -= dir * d.spd * slowF * dt;
-      u.p = Math.max(0, Math.min(LANE, u.p));
+      u.p = clampP(u.p, u.lane);
     } else if (d.heal) {
       stop = nd <= d.range || castleGap <= d.range;
       const hurtAllies = live.filter(a => a.side === s && a.hp > 0 && !a.wall && a.lane === u.lane && a.hp < a.max && Math.abs(a.p - u.p) <= d.range);
@@ -198,8 +203,8 @@ function sim() {
       // バードも弱く攻撃する(いちばん近い相手、いなければ城)
       if (d.dmg && u.atkT <= 0) {
         const inR = foes.filter(([v, g]) => g <= d.range).sort((a1, a2) => a1[1] - a2[1] || a1[0].id - a2[0].id);
-        if (inR.length) { hurt(inR[0][0], d.dmg, s); B.fx.push({ line: '#c9a6ff', p: u.p, x: u.x, p2: inR[0][0].p, x2: inR[0][0].x, l: u.lane, t: 0.15 }); u.atkT = d.rate; u.act = 0.2; }
-        else if (castleGap <= d.range) { B.castle[o] = Math.max(0, B.castle[o] - d.dmg); u.atkT = d.rate; u.act = 0.2; }
+        if (inR.length) { hurt(inR[0][0], d.dmg * power[s], s); B.fx.push({ line: '#c9a6ff', p: u.p, x: u.x, p2: inR[0][0].p, x2: inR[0][0].x, l: u.lane, t: 0.15 }); u.atkT = d.rate; u.act = 0.2; }
+        else if (castleGap <= d.range) { B.castle[o] = Math.max(0, B.castle[o] - d.dmg * power[s]); u.atkT = d.rate; u.act = 0.2; }
       }
     } else if (d.slow) {
       stop = nd <= d.range || castleGap <= d.range;
@@ -215,7 +220,7 @@ function sim() {
       const castleIn = castleGap <= d.range;
       stop = inR.length > 0 || castleIn;
       if (stop && u.atkT <= 0) {
-        let tgt = null, dmg = d.dmg;
+        let tgt = null, dmg = d.dmg * power[s];
         if (d.crit && B.rng() < d.crit) { dmg *= 2; B.fx.push({ txt: '!!', p: u.p, x: u.x, l: u.lane, t: 0.5 }); }
         const slowIt = v => { if (d.slowOnHit) { v.slowT = 1.5; v.slowP = d.slowOnHit; } };
         if (d.sniper) tgt = castleIn ? 'castle' : inR.sort((a, b) => b[0].hp - a[0].hp || a[0].id - b[0].id)[0][0];
@@ -226,7 +231,7 @@ function sim() {
           B.fx.push({ line: '#fff', p: u.p, x: u.x, p2: ts[ts.length - 1].p, x2: ts[ts.length - 1].x, l: u.lane, t: 0.18 });
         } else if (tgt === 'castle') {
           B.castle[o] = Math.max(0, B.castle[o] - dmg);
-          B.fx.push({ line: d.range > 8 ? '#ffd166' : '#fff', p: u.p, x: u.x, p2: homeP(o), x2: u.x * 0.3, l: u.lane, t: 0.15 });
+          B.fx.push({ line: d.range > 8 ? '#ffd166' : '#fff', p: u.p, x: u.x, p2: homeP(o, u.lane), x2: u.x * 0.3, l: u.lane, t: 0.15 });
         } else {
           hurt(tgt, dmg, s); slowIt(tgt);
           if (tgt.d.reflect) hurt(u, dmg * tgt.d.reflect, o);
@@ -243,7 +248,7 @@ function sim() {
     // 進む(相手の体を通りぬけない・城の前で止まる)
     if (!stop && nd > 2 && castleGap > 2) {
       u.p += dir * d.spd * slowF * hasteMove * dt;
-      u.p = Math.max(0, Math.min(LANE, u.p));
+      u.p = clampP(u.p, u.lane);
     }
   }
   B.units = B.units.filter(u => u.hp > 0);
@@ -263,8 +268,17 @@ function flagStep(dt) {
     const was = f.own;
     if (f.prog >= 1) f.own = 0; else if (f.prog <= -1) f.own = 1;
     else if (f.own === 0 && f.prog <= 0) f.own = -1; else if (f.own === 1 && f.prog >= 0) f.own = -1;
-    if (f.own !== was && f.own >= 0) B.fx.push({ flagGet: f.own, l, t: 0.8 });
+    if (f.own !== was && f.own >= 0) { B.fx.push({ flagGet: f.own, perk: f.perk, l, t: 0.8 }); if (f.perk === 'gauge') flagBlast(f.own, l); }
   }
+}
+
+/* 一撃の旗: 取った瞬間、旗のまわりの敵に城の一撃(ゲージは使わない) */
+function flagBlast(side, l) {
+  for (const u of B.units) if (u.side !== side && u.hp > 0 && u.lane === l && Math.abs(u.p - FLAG.at) <= PERK.blastReach) {
+    hurt(u, PERK.blastDmg, side);
+    u.p = clampP(u.p + DIR[side] * STRIKE.push, l);   // 旗から相手の城のほうへ押し返す
+  }
+  B.fx.push({ blast: side, l, t: 0.6 });
 }
 
 /* ---------- CPU(ひとりで練習) ---------- */
@@ -306,13 +320,13 @@ function cpuThink(dt) {
   // 城のまわりに相手が来たら、城の一撃
   if (B.gauge[1] >= STRIKE.charge) {
     for (let l = 0; l < B.lanes; l++) {
-      const close = B.units.filter(u => u.side === 0 && u.lane === l && fromHome(1, u.p) <= STRIKE.reach);
+      const close = B.units.filter(u => u.side === 0 && u.lane === l && fromHome(1, u.p, l) <= STRIKE.reach);
       const closeHp = close.reduce((a, u) => a + u.hp, 0);
       if (close.length >= 3 || closeHp >= 900 || B.castle[1] < CASTLE_HP * 0.35 && close.length) { strike(1, l); break; }
     }
   }
   // 押されていたら、安いのを急いで出す
-  const danger = B.units.some(u => u.side === 0 && fromHome(1, u.p) <= 30);
+  const danger = B.units.some(u => u.side === 0 && fromHome(1, u.p, u.lane) <= 30);
   const cheap = cpuCheap();
   if (danger && cheap && canSpawn(1, cheap) && B.rng() < 0.5) { spawn(1, cheap, cpuLane(true)); return; }
   if (!A.next || B.pl[1].cd[A.next] > 3) A.next = cpuPick();
@@ -330,7 +344,7 @@ function cpuThinkEasy(dt) {
   A.think -= dt; if (A.think > 0) return;
   if (B.t < CPU_WAIT) return;
   A.think = 1.5;
-  if (B.gauge[1] >= STRIKE.charge) for (let l = 0; l < B.lanes; l++) if (B.units.some(u => u.side === 0 && u.lane === l && fromHome(1, u.p) <= 10)) { strike(1, l); break; }
+  if (B.gauge[1] >= STRIKE.charge) for (let l = 0; l < B.lanes; l++) if (B.units.some(u => u.side === 0 && u.lane === l && fromHome(1, u.p, l) <= 10)) { strike(1, l); break; }
   const ks = B.pl[1].deck.filter(k => canSpawn(1, k) && !((UNITS[k].stats[0].coin || UNITS[k].stats[0].repair) && B.units.some(u => u.side === 1 && u.k === k)));
   if (ks.length && B.rng() < 0.7) spawn(1, ks[Math.floor(B.rng() * ks.length)], Math.floor(B.rng() * B.lanes));
 }
@@ -340,7 +354,7 @@ function cpuLane(defend) {
   let best = 0, bs = -Infinity;
   for (let l = 0; l < B.lanes; l++) {
     let threat = 0, mine = 0;
-    for (const u of B.units) if (u.lane === l) { if (u.side === 0) threat += u.hp * (1 + (LANE - fromHome(1, u.p)) / LANE); else mine += u.hp; }
+    for (const u of B.units) if (u.lane === l) { if (u.side === 0) threat += u.hp * (1 + (LANE - fromHome(1, u.p, l)) / LANE); else mine += u.hp; }
     const sc = (defend ? threat * 2 : threat) - mine + (B.flags[l].own === 0 ? 500 : B.flags[l].own === -1 ? 200 : 0) + B.rng() * 400;
     if (sc > bs) { bs = sc; best = l; }
   }
@@ -361,7 +375,8 @@ function home() {
     <div>${T('② コインは時間でたまる。キャラのボタンを道までドラッグして出撃')}</div>
     <div>${T('③ キャラは相手の城へ進み、ぶつかった敵と戦う')}</div>
     <div>${T('④ ゲージがたまったら「城の一撃」。道を1本選んで、城のまわりの敵を一気に攻撃')}</div>
-    <div>${T('⑤ 道のまん中の旗のまわりに、相手より多くキャラがいると旗が取れる。取った旗の数だけコインが多くたまる')}</div>
+    <div>${T('⑤ 道のまん中の旗のまわりに、相手より多くキャラがいると旗が取れる。旗ごとに特典がある(💰 コインが多くたまる・⚡ 取った瞬間、旗のまわりの敵に城の一撃・⚔ 味方の攻撃が上がる)')}</div>
+    <div>${T('道が2本以上のときは、城が前にせり出した短い道がある')}</div>
     <div>${T('⑥ 相手の城のHPを先に0にしたほうが勝ち(5分たったら、城のHPが多いほうの勝ち)')}</div>
   </div>
   <button id="solo" class="wide">${T('ひとりで練習(CPU対戦)')}</button>
@@ -531,7 +546,7 @@ function loop(now) {
   else if ($('intro') && !$('intro').hidden) $('intro').hidden = true;
   if (B.online) { if (!B.over && intro <= 0) netStep(dt); }
   else if (!B.paused && !B.over && intro <= 0) { acc += dt * B.speed; while (acc >= TICK) { sim(); acc -= TICK; if (B.over) break; } }
-  for (const f of B.fx) if (f.flagGet !== undefined && !f.told) { f.told = true; toast(f.flagGet === MS ? T('旗を取った！ コインが多くたまる') : T('旗を取られた…')); }
+  for (const f of B.fx) if (f.flagGet !== undefined && !f.told) { f.told = true; toast(f.flagGet === MS ? T({ coin: '旗を取った！ コインが多くたまる', gauge: '一撃の旗を取った！ 旗のまわりの敵に城の一撃', power: '力の旗を取った！ 味方の攻撃が上がる' }[f.perk || 'coin']) : T('旗を取られた…')); }
   for (const t of toasts) t.t -= dt;
   toasts = toasts.filter(t => t.t > 0);
   draw(); hud();
@@ -592,8 +607,9 @@ function draw() {
     if (drag) { cx.strokeStyle = hot ? '#fff' : 'rgba(255,255,255,.5)'; cx.setLineDash(hot ? [] : [6, 6]); cx.lineWidth = hot ? 3 : 2; cx.strokeRect(rx + 2, 2, ROAD() - 4, H - 4); cx.setLineDash([]); }
   }
   // 城の一撃が届く範囲(ゲージがたまっているとき)
-  if (B.gauge[MS] >= STRIKE.charge) { cx.fillStyle = 'rgba(255,215,0,.16)'; const ry = Y(MS ? LANE - STRIKE.reach : STRIKE.reach); for (let l = 0; l < B.lanes; l++) cx.fillRect(laneX(l) - ROAD() / 2, ry, ROAD(), H - ry); }
+  if (B.gauge[MS] >= STRIKE.charge) { cx.fillStyle = 'rgba(255,215,0,.16)'; for (let l = 0; l < B.lanes; l++) { const ry = Y(MS ? LANE - cutOf(l) - STRIKE.reach : cutOf(l) + STRIKE.reach); cx.fillRect(laneX(VL(l)) - ROAD() / 2, ry, ROAD(), H - ry); } }
   for (let l = 0; l < B.lanes; l++) flagDraw(l);
+  for (let l = 0; l < B.lanes; l++) if (cutOf(l)) { bastion(l, 1 - MS, 1); bastion(l, MS, 0); }   // せり出した城(先にかいて、城の旗を見せる)
   castle(Y(homeP(1 - MS)), 1); castle(Y(homeP(MS)), 0);
   // キャラ(奥=上から順に)
   const us = B.units.slice().sort((a, b) => Y(a.p) - Y(b.p) || a.id - b.id);
@@ -620,8 +636,12 @@ function draw() {
     if (f.ring) { cx.strokeStyle = f.ring; cx.lineWidth = 2; cx.beginPath(); const r = (f.r ? f.r / LANE * (BOT() - TOP()) : W * 0.06); cx.ellipse(X(f.x, f.l), Y(f.p), Math.min(r, ROAD() * 0.5), r, 0, 0, 7); cx.stroke(); }
     if (f.txt) { cx.fillStyle = '#ffe066'; cx.font = `bold ${Math.round(SPR() * 0.22)}px sans-serif`; cx.textAlign = 'center'; cx.fillText(f.txt, X(f.x, f.l), Y(f.p) - SPR() * 0.35 - (0.5 - f.t) * 20); }
     if (f.boom) { cx.fillStyle = '#fff3'; cx.beginPath(); cx.arc(X(f.x, f.l), Y(f.p), SPR() * 0.25 * (1.4 - f.t), 0, 7); cx.fill(); }
+    if (f.blast !== undefined) {
+      const y0 = Y(FLAG.at - PERK.blastReach), y1 = Y(FLAG.at + PERK.blastReach);
+      cx.fillStyle = 'rgba(255,200,40,.5)'; cx.fillRect(laneX(VL(f.l)) - ROAD() / 2, Math.min(y0, y1), ROAD(), Math.abs(y1 - y0));
+    }
     if (f.strike !== undefined) {
-      const s = f.strike, y0 = Y(homeP(s)), y1 = Y(s === 0 ? STRIKE.reach : LANE - STRIKE.reach);
+      const s = f.strike, y0 = Y(homeP(s, f.l)), y1 = Y(s === 0 ? cutOf(f.l) + STRIKE.reach : LANE - cutOf(f.l) - STRIKE.reach);
       cx.fillStyle = 'rgba(255,200,40,.5)'; cx.fillRect(laneX(VL(f.l)) - ROAD() / 2, Math.min(y0, y1), ROAD(), Math.abs(y1 - y0));
     }
     cx.globalAlpha = 1;
@@ -638,6 +658,8 @@ function flagDraw(l) {
   cx.strokeStyle = '#4a3a2a'; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(px, y + s * 0.1); cx.lineTo(px, top); cx.stroke();
   cx.fillStyle = FLAG_COL[f.own < 0 ? -1 : f.own === MS ? 0 : 1]; cx.strokeStyle = 'rgba(0,0,0,.45)'; cx.lineWidth = 1;
   cx.beginPath(); cx.moveTo(px, top); cx.lineTo(px - s * 0.38, top + s * 0.13); cx.lineTo(px, top + s * 0.26); cx.closePath(); cx.fill(); cx.stroke();
+  // 旗の特典のしるし
+  cx.font = `${Math.round(s * 0.2)}px sans-serif`; cx.textAlign = 'center'; cx.textBaseline = 'middle'; cx.fillText(PERK_ICON[f.perk] || '', px - s * 0.2, top + s * 0.4); cx.textBaseline = 'alphabetic';
   // どちらにかたむいているか(青 = 自分、赤 = 相手)
   const w = ROAD() * 0.5, bx = x - w / 2, by = y + s * 0.16;
   cx.fillStyle = 'rgba(0,0,0,.4)'; cx.fillRect(bx, by, w, 4);
@@ -658,6 +680,13 @@ function fence(u) {
   }
   cx.globalAlpha = 1;
   bar(x, y - h * 0.55 - 6, u.hp / u.max, u.side !== MS ? '#e74c3c' : '#3fa9f5', w * 0.6);
+}
+/* せり出した城(短い道): 城の色で、道の幅に、城の前までのばす */
+function bastion(l, sd, look) {
+  const x = laneX(VL(l)), w = ROAD() * 1.1, y0 = Y(homeP(sd)), y1 = Y(homeP(sd, l));
+  cx.fillStyle = look ? '#5a1e1e' : '#3d4f6b';
+  cx.fillRect(x - w / 2, Math.min(y0, y1), w, Math.abs(y1 - y0));
+  for (let i = 0; i < 3; i++) cx.fillRect(x - w / 2 + i * w / 2.5, look ? y1 : y1 - H * 0.018, w / 5, H * 0.018);
 }
 function castle(y, side) {
   const w = B.lanes === 1 ? W * 0.5 : W * 0.86, h = H * 0.07, x = W / 2 - w / 2, top = side ? y - h * 1.05 : y - h * 0.05;

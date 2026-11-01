@@ -21,6 +21,18 @@ const STRIKE = { charge: 30, reach: 25, dmg: 450, push: 8 };
    範囲の中にいるキャラ(戦わないキャラはのぞく)が多いほうへ、旗が少しずつかたむく */
 const FLAG = { at: 50, zone: 12, capture: 3, coin: 6 };
 
+/* 道の形と旗の特典(v=16〜)。道の数ごとに、左から順に書く(相手の画面では左右が逆に見える)。
+   cut: その道だけ、城が前にせり出す長さ(両方の城とも)。cut 10 なら道の長さは 80。
+   perk: 旗の特典。coin = コインが1秒に PERK.coin 多くたまる / gauge = 取った瞬間、旗のまわり(PERK.blastReach)の敵に
+         城の一撃(PERK.blastDmg ダメージ・押し返す。城のゲージは使わない) / power = その陣営のキャラみんなの攻撃が PERK.power ぶん上がる */
+const LANE_SET = {
+  1: [{ cut: 0, perk: 'coin' }],
+  2: [{ cut: 10, perk: 'coin' }, { cut: 0, perk: 'gauge' }],
+  3: [{ cut: 0, perk: 'gauge' }, { cut: 10, perk: 'coin' }, { cut: 0, perk: 'power' }],
+};
+const PERK = { coin: 3, blastDmg: 450, blastReach: 16, power: 0.15 };
+const PERK_ICON = { coin: '💰', gauge: '⚡', power: '⚔' };
+
 /* role: atk アタッカー / tank タンク / heal ヒーラー / sup サポート
    up: [Lv2 にする値段, Lv3 にする値段]
    とくべつな力: crit(会心の確率) / pierce(前に並んだ何体まで当たる) / splash(まわりにも当たる長さ) / slowOnHit(当てた敵を遅くする)
