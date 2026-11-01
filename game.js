@@ -44,7 +44,7 @@ function newBattle(seed, opt) {
   const on = opt && opt.online, lanes = on ? on.lanes : laneCount;
   const mk = (side, deck, coin, rate, kind) => ({ side, deck: deck.slice(), coin, rate, kind: kind || 'u', cd: {}, lv: {}, spent: 0 });
   const pl = on ? on.players.map(p => mk(p.side, p.deck, START_COIN, 1))
-    : [mk(0, picks, START_COIN, 1), mk(1, [], START_COIN * 0.6, CPU_LEVELS[cpuLevel])];   // kind 'e' にすると CPU軍(ゴブリンたち)で戦う
+    : [mk(0, picks, START_COIN, 1), mk(1, [], START_COIN, CPU_LEVELS[cpuLevel])];   // kind 'e' にすると CPU軍(ゴブリンたち)で戦う
   const size = [0, 1].map(sd => Math.max(1, pl.filter(p => p.side === sd).length));
   B = {
     tick: 0, t: 0, rng: makeRng(seed || 1), uid: 1, lanes, pl,
@@ -52,7 +52,7 @@ function newBattle(seed, opt) {
     flags: Array.from({ length: lanes }, () => ({ own: -1, prog: 0 })),   // prog: +1 で side 0、-1 で side 1 のもの
     cpu: !on, online: !!on,
     units: [], fx: [], over: null, kills: [0, 0],
-    ai: { next: null, think: 0 },
+    ai: { next: null, think: 0, easy: cpuLevel === 'easy' },
     speed: 1, paused: false,
   };
   if (!on) pl[1].deck = cpuDeck(B.rng);
@@ -298,6 +298,7 @@ function cpuPick() {
 /* 押されているときに急いで出す: いちばん安い、戦うキャラ */
 const cpuCheap = () => B.pl[1].deck.filter(k => UNITS[k].role === 'atk' || UNITS[k].role === 'tank').sort((a, b) => UNITS[a].cost - UNITS[b].cost)[0];
 function cpuThink(dt) {
+  if (B.ai.easy) return cpuThinkEasy(dt);
   const A = B.ai;
   A.think -= dt; if (A.think > 0) return;
   if (B.t < CPU_WAIT) return;
@@ -321,6 +322,17 @@ function cpuThink(dt) {
     const ks = B.pl[1].deck.filter(k => lvOf(1, k) < LV_MAX && B.pl[1].coin >= upCost(1, k) + 120);
     if (ks.length) levelUp(1, ks[Math.floor(B.rng() * ks.length)]);
   }
+}
+/* かんたんの CPU(やさしい頭): 1.5秒ごとに考える。出すキャラと道はランダム(ときどき出さない)。
+   押されても急がない。レベル上げしない。城の一撃は、相手が城のすぐ前(10)に来てから */
+function cpuThinkEasy(dt) {
+  const A = B.ai;
+  A.think -= dt; if (A.think > 0) return;
+  if (B.t < CPU_WAIT) return;
+  A.think = 1.5;
+  if (B.gauge[1] >= STRIKE.charge) for (let l = 0; l < B.lanes; l++) if (B.units.some(u => u.side === 0 && u.lane === l && fromHome(1, u.p) <= 10)) { strike(1, l); break; }
+  const ks = B.pl[1].deck.filter(k => canSpawn(1, k) && !((UNITS[k].stats[0].coin || UNITS[k].stats[0].repair) && B.units.some(u => u.side === 1 && u.k === k)));
+  if (ks.length && B.rng() < 0.7) spawn(1, ks[Math.floor(B.rng() * ks.length)], Math.floor(B.rng() * B.lanes));
 }
 /* CPU が出す道: 押されている道を守る。ほかは、相手が強い道(+ランダム) */
 function cpuLane(defend) {

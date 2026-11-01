@@ -7,7 +7,7 @@
 
 const LANE = 100;
 const CASTLE_HP = 2500;
-const START_COIN = 250;
+const START_COIN = 150;         // はじめのコイン(v=15: 250 → 150。CPU も同じ)
 const COIN_PER_SEC = 18;
 const COIN_MAX = 2000;
 const KILL_BONUS = 0.25;        // 敵を倒すと、その敵の値段 × これのコイン
@@ -93,6 +93,7 @@ const ENEMIES = {
 const ENEMY_LV = [1, 1.3, 1.6];
 const ENEMY_UP = [1, 2];        // CPU が強化する値段 = 値段 × これ
 
-/* CPU の強さ(コインのたまる速さの倍率)。CPU は最初の CPU_WAIT 秒は出撃しない */
-const CPU_WAIT = 8;
-const CPU_LEVELS = { easy: 0.6, normal: 0.85, hard: 1.1 };
+/* CPU の強さ(コインのたまる速さの倍率)。v=15: ふつう・むずかしいは同じ頭(cpuThink)、かんたんは、やさしい頭(cpuThinkEasy)。
+   CPU は最初の CPU_WAIT 秒は出撃しない(v=15 から 0 = 最初から出す) */
+const CPU_WAIT = 0;
+const CPU_LEVELS = { easy: 0.6, normal: 0.75, hard: 1.0 };
