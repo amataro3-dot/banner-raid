@@ -49,7 +49,7 @@ button.mini{padding:7px 10px;font-size:13px}
 .toast{background:rgba(30,20,10,.82);color:#fff;font-size:13px;font-weight:700;padding:4px 10px;border-radius:12px}
 .row{display:flex;justify-content:center;align-items:center;flex-wrap:wrap}
 .pal{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:6px 0}
-.pb{position:relative;overflow:hidden;margin:0;padding:4px 0 3px;display:flex;flex-direction:column;align-items:center;background:var(--card);color:var(--tx);border:2px solid var(--bd);font-size:13px;font-variant-numeric:tabular-nums}
+.pb{position:relative;overflow:hidden;touch-action:none;-webkit-touch-callout:none;margin:0;padding:4px 0 3px;display:flex;flex-direction:column;align-items:center;background:var(--card);color:var(--tx);border:2px solid var(--bd);font-size:13px;font-variant-numeric:tabular-nums}
 .pb img{width:100%;max-width:92px;aspect-ratio:176/100;image-rendering:pixelated;pointer-events:none}
 .pb span{position:relative;z-index:1}
 .pb .cdv{position:absolute;left:0;right:0;bottom:0;height:0;background:rgba(0,0,0,.45);pointer-events:none}
@@ -65,3 +65,4 @@ button.mini{padding:7px 10px;font-size:13px}
 @media(prefers-reduced-motion:reduce){.strike.ready{animation:none}}
 .team{display:flex;justify-content:center;gap:4px;margin-top:8px}
 .team img{width:72px;image-rendering:pixelated}
+.ghost{position:fixed;z-index:50;width:96px;transform:translate(-50%,-70%);pointer-events:none;image-rendering:pixelated;filter:drop-shadow(0 4px 6px rgba(0,0,0,.4))}

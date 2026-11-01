@@ -34,11 +34,11 @@ const fromHome = (s, p) => (s === 0 ? p : LANE - p);   // 自分の城からの�
 let B = null;
 let picks = (LS.get('br-picks') || '').split(',').filter(k => UNITS[k]).slice(0, 4);
 let cpuLevel = CPU_LEVELS[LS.get('br-cpu')] ? LS.get('br-cpu') : 'normal';
-let laneCount = [1, 2, 3].includes(+LS.get('br-lanes')) ? +LS.get('br-lanes') : 1;   // 道の数(試し: 1〜3本)
+let laneCount = [1, 2, 3].includes(+LS.get('br-lanes')) ? +LS.get('br-lanes') : 2;   // 道の数(基本は2本。1本・3本も選べる)
 
 function newBattle(seed) {
   B = {
-    tick: 0, t: 0, rng: makeRng(seed || 1), uid: 1, lanes: laneCount, sel: null,
+    tick: 0, t: 0, rng: makeRng(seed || 1), uid: 1, lanes: laneCount,
     coin: [START_COIN, START_COIN * 0.6], castle: [CASTLE_HP, CASTLE_HP], gauge: [0, 0],
     cd: [{}, {}], deck: [picks.slice(), Object.keys(ENEMIES)], kind: ['u', 'e'],
     rate: [1, CPU_LEVELS[cpuLevel]],
@@ -227,7 +227,7 @@ function home() {
   <div class="card left">
     <div class="lbl">${T('遊び方')}</div>
     <div>${T('① 12体のキャラから4体を選ぶ')}</div>
-    <div>${T('② コインは時間でたまる。ボタンでキャラを出撃させる')}</div>
+    <div>${T('② コインは時間でたまる。キャラのボタンを道までドラッグして出撃')}</div>
     <div>${T('③ キャラは相手の城へ進み、ぶつかった敵と戦う')}</div>
     <div>${T('④ ゲージがたまったら「城の一撃」で、城のまわりの敵を一気に攻撃')}</div>
     <div>${T('⑤ 相手の城のHPを先に0にしたほうが勝ち(5分たったら、城のHPが多いほうの勝ち)')}</div>
@@ -298,22 +298,46 @@ function play() {
   </div>`;
   cv = $('cv'); cx = cv.getContext('2d');
   resize();
-  app.querySelectorAll('.pb').forEach(b => b.onclick = () => {
-    const k = b.dataset.k;
-    if (B.lanes > 1) { B.sel = B.sel === k ? null : k; if (B.sel) toast(T('道をタップして出撃')); return; }
-    trySpawn(k, 0);
+  // 出撃: ボタンを押さえたまま道までドラッグして離す(道が1本のときは、タップでも出せる)
+  app.querySelectorAll('.pb').forEach(b => {
+    b.onpointerdown = ev => {
+      const k = b.dataset.k;
+      if (B.over || drag) return;
+      if (B.coin[0] < UNITS[k].cost) { toast(T('コインが足りない')); return; }
+      if (B.cd[0][k] > 0) { toast(T('まだ出せない')); return; }
+      ev.preventDefault();
+      try { b.setPointerCapture(ev.pointerId); } catch (e) { }
+      const g = document.createElement('img');
+      g.src = imgSrc(k); g.className = 'ghost'; document.body.appendChild(g);
+      drag = { k, id: ev.pointerId, g, lane: -1, x0: ev.clientX, y0: ev.clientY, moved: false };
+      dragMove(ev);
+    };
+    b.onpointermove = ev => { if (drag && ev.pointerId === drag.id) dragMove(ev); };
+    b.onpointerup = ev => { if (drag && ev.pointerId === drag.id) dragEnd(ev, true); };
+    b.onpointercancel = ev => { if (drag && ev.pointerId === drag.id) dragEnd(ev, false); };
+    b.oncontextmenu = ev => ev.preventDefault();
   });
-  cv.onclick = ev => {
-    if (B.lanes === 1 || !B.sel) return;
-    const r = cv.getBoundingClientRect();
-    trySpawn(B.sel, Math.floor((ev.clientX - r.left) / r.width * B.lanes));
-  };
   $('strike').onclick = () => strike(0);
   $('spd').onclick = () => { B.speed = B.speed === 1 ? 2 : 1; $('spd').textContent = '▶︎×' + B.speed; };
   $('pause').onclick = () => { B.paused = !B.paused; $('pause').textContent = B.paused ? '▶︎' : '⏸'; };
   $('quit').onclick = () => { B.over = 'quit'; };
   lastT = performance.now(); acc = 0;
   raf = requestAnimationFrame(loop);
+}
+let drag = null;
+function dragMove(ev) {
+  const d = drag, r = cv.getBoundingClientRect();
+  d.g.style.left = ev.clientX + 'px'; d.g.style.top = ev.clientY + 'px';
+  if (Math.hypot(ev.clientX - d.x0, ev.clientY - d.y0) > 12) d.moved = true;
+  const inside = ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom;
+  d.lane = inside ? Math.max(0, Math.min(B.lanes - 1, Math.floor((ev.clientX - r.left) / r.width * B.lanes))) : -1;
+}
+function dragEnd(ev, drop) {
+  const d = drag; drag = null;
+  d.g.remove();
+  if (!drop) return;
+  if (d.lane >= 0) trySpawn(d.k, d.lane);
+  else if (!d.moved) { if (B.lanes === 1) trySpawn(d.k, 0); else toast(T('道までドラッグして出撃')); }
 }
 function trySpawn(k, lane) {
   if (spawn(0, k, lane)) return;
@@ -334,7 +358,7 @@ function resize() {
 }
 window.addEventListener('resize', () => { if (B && cv && document.body.contains(cv)) resize(); });
 
-function stopLoop() { if (raf) cancelAnimationFrame(raf); raf = 0; }
+function stopLoop() { if (raf) cancelAnimationFrame(raf); raf = 0; if (drag) { drag.g.remove(); drag = null; } }
 function loop(now) {
   const dt = Math.min(0.1, (now - lastT) / 1000); lastT = now;
   if (!B.paused && !B.over) { acc += dt * B.speed; while (acc >= TICK) { sim(); acc -= TICK; if (B.over) break; } }
@@ -355,7 +379,7 @@ function hud() {
   app.querySelectorAll('.pb').forEach(b => {
     const k = b.dataset.k, cd = B.cd[0][k] || 0;
     b.classList.toggle('poor', B.coin[0] < UNITS[k].cost);
-    b.classList.toggle('on', B.sel === k);
+    b.classList.toggle('on', !!drag && drag.k === k);
     b.querySelector('.cdv').style.height = (cd > 0 ? cd / UNITS[k].cd * 100 : 0) + '%';
   });
   const g = B.gauge[0] / STRIKE.charge;
@@ -376,10 +400,11 @@ function draw() {
   // 道
   for (let l = 0; l < B.lanes; l++) {
     const rx = laneX(l) - ROAD() / 2;
-    cx.fillStyle = B.sel ? '#d8b77a' : '#c9a66b'; cx.fillRect(rx, 0, ROAD(), H);
+    const hot = drag && drag.lane === l;
+    cx.fillStyle = hot ? '#e6c98f' : '#c9a66b'; cx.fillRect(rx, 0, ROAD(), H);
     cx.fillStyle = 'rgba(0,0,0,.07)';
     for (let i = 0; i < 12; i++) cx.fillRect(rx, (i * H) / 12, ROAD(), 2);
-    if (B.sel) { cx.strokeStyle = 'rgba(255,255,255,.6)'; cx.setLineDash([6, 6]); cx.lineWidth = 2; cx.strokeRect(rx + 2, 2, ROAD() - 4, H - 4); cx.setLineDash([]); }
+    if (drag) { cx.strokeStyle = hot ? '#fff' : 'rgba(255,255,255,.5)'; cx.setLineDash(hot ? [] : [6, 6]); cx.lineWidth = hot ? 3 : 2; cx.strokeRect(rx + 2, 2, ROAD() - 4, H - 4); cx.setLineDash([]); }
   }
   // 城の一撃が届く範囲(ゲージがたまっているとき)
   if (B.gauge[0] >= STRIKE.charge) { cx.fillStyle = 'rgba(255,215,0,.13)'; cx.fillRect(0, Y(STRIKE.reach), W, H - Y(STRIKE.reach)); }

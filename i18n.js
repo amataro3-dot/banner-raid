@@ -81,7 +81,7 @@ const I18N = {
   'ホームへ': ['Home', '홈으로'],
   // --- v=2(攻めていくタイプ) ---
   'キャラを出撃させて、相手の城を落とせ！': ['Send out your characters and take the enemy castle!', '캐릭터를 출격시켜 상대 성을 무너뜨려라!'],
-  '② コインは時間でたまる。ボタンでキャラを出撃させる': ['② Coins build up over time. Tap a button to send a character out', '② 코인은 시간이 지나면 쌓인다. 버튼으로 캐릭터를 출격'],
+  '② コインは時間でたまる。キャラのボタンを道までドラッグして出撃': ['② Coins build up over time. Drag a character button onto a lane to send it out', '② 코인은 시간이 지나면 쌓인다. 캐릭터 버튼을 길까지 드래그해서 출격'],
   '③ キャラは相手の城へ進み、ぶつかった敵と戦う': ['③ Characters march to the enemy castle and fight whoever they meet', '③ 캐릭터는 상대 성으로 나아가며 마주친 적과 싸운다'],
   '④ ゲージがたまったら「城の一撃」で、城のまわりの敵を一気に攻撃': ['④ When the gauge is full, use Castle Strike to hit every enemy near your castle', '④ 게이지가 차면 「성의 일격」으로 성 주변의 적을 한꺼번에 공격'],
   '⑤ 相手の城のHPを先に0にしたほうが勝ち(5分たったら、城のHPが多いほうの勝ち)': ['⑤ First to bring the enemy castle to 0 HP wins (after 5 minutes, more castle HP wins)', '⑤ 상대 성의 HP를 먼저 0으로 만들면 승리 (5분이 지나면 성 HP가 많은 쪽이 승리)'],
@@ -114,6 +114,6 @@ const I18N = {
   '刺客': ['Assassin', '자객'],
   '道の数': ['Lanes', '길 수'],
   '{n}本': ['{n}', '{n}개'],
-  '道をタップして出撃': ['Tap a lane to send it out', '길을 탭해서 출격'],
+  '道までドラッグして出撃': ['Drag onto a lane to send it out', '길까지 드래그해서 출격'],
   'まだ出せない': ['Not ready yet', '아직 출격할 수 없어요'],
 };
