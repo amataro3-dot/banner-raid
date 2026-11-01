@@ -4,7 +4,7 @@
    - size は絵の大きさ(1 がふつう)。 */
 
 const LANE = 100;
-const CASTLE_HP = 5000;
+const CASTLE_HP = 2500;
 const START_COIN = 250;
 const COIN_PER_SEC = 18;
 const COIN_MAX = 2000;
