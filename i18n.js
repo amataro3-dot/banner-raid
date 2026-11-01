@@ -80,8 +80,6 @@ const I18N = {
   'キャラを出撃させて、相手の城を落とせ！': ['Send out your characters and take the enemy castle!', '캐릭터를 출격시켜 상대 성을 무너뜨려라!'],
   '② コインは時間でたまる。キャラのボタンを道までドラッグして出撃': ['② Coins build up over time. Drag a character button onto a lane to send it out', '② 코인은 시간이 지나면 쌓인다. 캐릭터 버튼을 길까지 드래그해서 출격'],
   '③ キャラは相手の城へ進み、ぶつかった敵と戦う': ['③ Characters march to the enemy castle and fight whoever they meet', '③ 캐릭터는 상대 성으로 나아가며 마주친 적과 싸운다'],
-  '④ ゲージがたまったら「城の一撃」で、城のまわりの敵を一気に攻撃': ['④ When the gauge is full, use Castle Strike to hit every enemy near your castle', '④ 게이지가 차면 「성의 일격」으로 성 주변의 적을 한꺼번에 공격'],
-  '⑤ 相手の城のHPを先に0にしたほうが勝ち(5分たったら、城のHPが多いほうの勝ち)': ['⑤ First to bring the enemy castle to 0 HP wins (after 5 minutes, more castle HP wins)', '⑤ 상대 성의 HP를 먼저 0으로 만들면 승리 (5분이 지나면 성 HP가 많은 쪽이 승리)'],
   '選んだ4体だけを、試合で出撃できます({n}/4)': ['Only your 4 picks can be sent out in battle ({n}/4)', '고른 4명만 경기에서 출격할 수 있어요 ({n}/4)'],
   'CPUの強さ': ['CPU level', 'CPU 난이도'],
   'かんたん': ['Easy', '쉬움'],
@@ -139,4 +137,11 @@ const I18N = {
   '戦わない。城のそばで、城を少しずつ直す': ['Doesn’t fight. Stays by the castle and slowly repairs it', '싸우지 않는다. 성 옆에서 성을 조금씩 고친다'],
   '城を直す量が増える': ['Repairs more', '성을 고치는 양이 늘어난다'],
   '城の一撃のゲージも速くたまる': ['Also charges the Castle Strike gauge faster', '성의 일격 게이지도 빨리 찬다'],
+  // --- v=9(旗・道を選ぶ城の一撃) ---
+  '④ ゲージがたまったら「城の一撃」。道を1本選んで、城のまわりの敵を一気に攻撃': ['④ When the gauge is full, use Castle Strike on one lane to hit every enemy near your castle', '④ 게이지가 차면 「성의 일격」. 길 하나를 골라 성 주변의 적을 한꺼번에 공격'],
+  '⑤ 道のまん中の旗のまわりに、相手より多くキャラがいると旗が取れる。取った旗の数だけコインが多くたまる': ['⑤ Have more characters than the enemy around the flag in the middle of a lane to take it. Each flag you hold earns extra coins', '⑤ 길 가운데 깃발 주변에 상대보다 캐릭터가 많으면 깃발을 차지한다. 차지한 깃발 수만큼 코인이 더 쌓인다'],
+  '⑥ 相手の城のHPを先に0にしたほうが勝ち(5分たったら、城のHPが多いほうの勝ち)': ['⑥ First to bring the enemy castle to 0 HP wins (after 5 minutes, more castle HP wins)', '⑥ 상대 성의 HP를 먼저 0으로 만들면 승리 (5분이 지나면 성 HP가 많은 쪽이 승리)'],
+  'ゲージがたまっていない': ['The gauge isn’t full yet', '게이지가 아직 안 찼어요'],
+  '旗を取った！ コインが多くたまる': ['Flag taken! You earn extra coins', '깃발 획득! 코인이 더 쌓인다'],
+  '旗を取られた…': ['The enemy took a flag…', '깃발을 빼앗겼다…'],
 };

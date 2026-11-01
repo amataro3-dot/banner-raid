@@ -14,8 +14,12 @@ const KILL_BONUS = 0.25;        // 敵を倒すと、その敵の値段 × こ�
 const TIME_LIMIT = 300;         // 5分。すぎたら城のHPが多いほうの勝ち
 const LV_MAX = 3;
 
-/* 城の一撃: たまるまでの秒数、届く範囲(自分の城から)、ダメージ、押し返す長さ */
-const STRIKE = { charge: 30, reach: 25, dmg: 300, push: 8 };
+/* 城の一撃: たまるまでの秒数、届く範囲(自分の城から)、ダメージ、押し返す長さ。道を1本選んで撃つ(v=9〜) */
+const STRIKE = { charge: 30, reach: 25, dmg: 450, push: 8 };
+
+/* 道のまん中の旗(v=9〜): 場所、取り合う範囲(旗から前後)、取るのにかかる秒数、取っているあいだ1秒にふえるコイン
+   範囲の中にいるキャラ(戦わないキャラはのぞく)が多いほうへ、旗が少しずつかたむく */
+const FLAG = { at: 50, zone: 12, capture: 3, coin: 6 };
 
 /* role: atk アタッカー / tank タンク / heal ヒーラー / sup サポート
    up: [Lv2 にする値段, Lv3 にする値段]
@@ -86,4 +90,4 @@ const ENEMY_UP = [1, 2];        // CPU が強化する値段 = 値段 × これ
 
 /* CPU の強さ(コインのたまる速さの倍率)。CPU は最初の CPU_WAIT 秒は出撃しない */
 const CPU_WAIT = 8;
-const CPU_LEVELS = { easy: 0.5, normal: 0.7, hard: 0.95 };
+const CPU_LEVELS = { easy: 0.6, normal: 0.85, hard: 1.1 };

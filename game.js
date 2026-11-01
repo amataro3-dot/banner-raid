@@ -40,6 +40,7 @@ function newBattle(seed) {
   B = {
     tick: 0, t: 0, rng: makeRng(seed || 1), uid: 1, lanes: laneCount,
     coin: [START_COIN, START_COIN * 0.6], castle: [CASTLE_HP, CASTLE_HP], gauge: [0, 0],
+    flags: Array.from({ length: laneCount }, () => ({ own: -1, prog: 0 })),   // prog: +1 で自分、-1 で相手のもの
     cd: [{}, {}], lv: [{}, {}], deck: [picks.slice(), Object.keys(ENEMIES)], kind: ['u', 'e'],
     rate: [1, CPU_LEVELS[cpuLevel]],
     units: [], fx: [], over: null, kills: [0, 0], spent: [0, 0],
@@ -82,15 +83,16 @@ function spawn(side, k, lane) {
 }
 
 /* 城の一撃 */
-function strike(side) {
+function strike(side, lane) {
   if (B.over || B.gauge[side] < STRIKE.charge) return false;
+  lane = Math.max(0, Math.min(B.lanes - 1, lane | 0));
   B.gauge[side] = 0;
-  for (const u of B.units) if (u.side !== side && u.hp > 0 && fromHome(side, u.p) <= STRIKE.reach) {
+  for (const u of B.units) if (u.side !== side && u.hp > 0 && u.lane === lane && fromHome(side, u.p) <= STRIKE.reach) {
     hurt(u, STRIKE.dmg, side);
     u.p += DIR[1 - side] * -STRIKE.push;   // 城から遠ざける
     u.p = Math.max(0, Math.min(LANE, u.p));
   }
-  B.fx.push({ strike: side, t: 0.6 });
+  B.fx.push({ strike: side, l: lane, t: 0.6 });
   return true;
 }
 
@@ -109,11 +111,13 @@ function sim() {
   for (const s of [0, 1]) {
     let bonus = 0, fix = 0, boost = 0;
     for (const u of B.units) if (u.side === s && u.hp > 0) { bonus += u.d.coin || 0; fix += u.d.repair || 0; boost += u.d.gauge || 0; }
+    for (const f of B.flags) if (f.own === s) bonus += FLAG.coin;
     B.coin[s] = Math.min(COIN_MAX, B.coin[s] + (COIN_PER_SEC * B.rate[s] + bonus) * dt);
     if (fix && B.castle[s] > 0) B.castle[s] = Math.min(CASTLE_HP, B.castle[s] + fix * dt);
     B.gauge[s] = Math.min(STRIKE.charge, B.gauge[s] + dt * (1 + Math.min(1, boost)));
     for (const k in B.cd[s]) if (B.cd[s][k] > 0) B.cd[s][k] -= dt;
   }
+  flagStep(dt);
   if (B.cpu !== false) cpuThink(dt);
 
   const live = B.units.filter(u => u.hp > 0);
@@ -204,6 +208,19 @@ function sim() {
   else if (B.t >= TIME_LIMIT) B.over = B.castle[0] > B.castle[1] ? 'win' : B.castle[0] < B.castle[1] ? 'lose' : 'draw';
 }
 
+/* 道のまん中の旗: 範囲にいるキャラが多いほうへかたむき、端まで行ったらその陣営のもの */
+function flagStep(dt) {
+  for (let l = 0; l < B.lanes; l++) {
+    const f = B.flags[l]; let n0 = 0, n1 = 0;
+    for (const u of B.units) if (u.hp > 0 && u.lane === l && !u.d.coin && !u.d.repair && Math.abs(u.p - FLAG.at) <= FLAG.zone) { if (u.side === 0) n0++; else n1++; }
+    if (n0 !== n1) f.prog = Math.max(-1, Math.min(1, f.prog + Math.sign(n0 - n1) * dt / FLAG.capture));
+    const was = f.own;
+    if (f.prog >= 1) f.own = 0; else if (f.prog <= -1) f.own = 1;
+    else if (f.own === 0 && f.prog <= 0) f.own = -1; else if (f.own === 1 && f.prog >= 0) f.own = -1;
+    if (f.own !== was && f.own >= 0) B.fx.push({ flagGet: f.own, l, t: 0.8 });
+  }
+}
+
 /* ---------- CPU(ひとりで練習) ---------- */
 const AI_WEIGHT = { goblin: 30, wolf: 18, skeleton: 22, orc: 16, assassin: 12 };
 function cpuPick() {
@@ -219,9 +236,13 @@ function cpuThink(dt) {
   if (B.t < CPU_WAIT) return;
   A.think = 0.5;
   // 城のまわりに相手が来たら、城の一撃
-  const close = B.units.filter(u => u.side === 0 && fromHome(1, u.p) <= STRIKE.reach);
-  const closeHp = close.reduce((a, u) => a + u.hp, 0);
-  if (B.gauge[1] >= STRIKE.charge && (close.length >= 3 || closeHp >= 900 || B.castle[1] < CASTLE_HP * 0.35 && close.length)) strike(1);
+  if (B.gauge[1] >= STRIKE.charge) {
+    for (let l = 0; l < B.lanes; l++) {
+      const close = B.units.filter(u => u.side === 0 && u.lane === l && fromHome(1, u.p) <= STRIKE.reach);
+      const closeHp = close.reduce((a, u) => a + u.hp, 0);
+      if (close.length >= 3 || closeHp >= 900 || B.castle[1] < CASTLE_HP * 0.35 && close.length) { strike(1, l); break; }
+    }
+  }
   // 押されていたら、安いのを急いで出す
   const danger = B.units.some(u => u.side === 0 && fromHome(1, u.p) <= 30);
   if (danger && canSpawn(1, 'goblin') && B.rng() < 0.5) { spawn(1, 'goblin', cpuLane(true)); return; }
@@ -240,7 +261,7 @@ function cpuLane(defend) {
   for (let l = 0; l < B.lanes; l++) {
     let threat = 0, mine = 0;
     for (const u of B.units) if (u.lane === l) { if (u.side === 0) threat += u.hp * (1 + (LANE - fromHome(1, u.p)) / LANE); else mine += u.hp; }
-    const sc = (defend ? threat * 2 : threat) - mine + B.rng() * 400;
+    const sc = (defend ? threat * 2 : threat) - mine + (B.flags[l].own === 0 ? 500 : B.flags[l].own === -1 ? 200 : 0) + B.rng() * 400;
     if (sc > bs) { bs = sc; best = l; }
   }
   return best;
@@ -259,8 +280,9 @@ function home() {
     <div>${T('⬆ でキャラのレベルを上げられる(Lv3まで)。4体は Lv3 で進化する')}</div>
     <div>${T('② コインは時間でたまる。キャラのボタンを道までドラッグして出撃')}</div>
     <div>${T('③ キャラは相手の城へ進み、ぶつかった敵と戦う')}</div>
-    <div>${T('④ ゲージがたまったら「城の一撃」で、城のまわりの敵を一気に攻撃')}</div>
-    <div>${T('⑤ 相手の城のHPを先に0にしたほうが勝ち(5分たったら、城のHPが多いほうの勝ち)')}</div>
+    <div>${T('④ ゲージがたまったら「城の一撃」。道を1本選んで、城のまわりの敵を一気に攻撃')}</div>
+    <div>${T('⑤ 道のまん中の旗のまわりに、相手より多くキャラがいると旗が取れる。取った旗の数だけコインが多くたまる')}</div>
+    <div>${T('⑥ 相手の城のHPを先に0にしたほうが勝ち(5分たったら、城のHPが多いほうの勝ち)')}</div>
   </div>
   <button id="solo" class="wide">${T('ひとりで練習(CPU対戦)')}</button>
   <button class="wide sub" disabled>${T('オンライン対戦(準備中)')}</button>
@@ -322,7 +344,7 @@ function play() {
   </div>
   <div class="pal">${picks.map(k => `<div class="slot"><button class="pb r-${UNITS[k].role}" data-k="${k}"><img src="${imgSrc(UNITS[k].stats[0].img)}" alt=""><span><b class="lvb">Lv1</b> ${UNITS[k].cost}</span><i class="cdv"></i></button><button class="up" data-up="${k}">⬆<small></small></button></div>`).join('')}</div>
   <div class="row">
-    <button id="strike" class="strike"><i id="gauge"></i><span>${T('城の一撃')}</span></button>
+    <div class="strikes">${Array.from({ length: laneCount }, (_, l) => `<button class="strike" data-sl="${l}"><i></i><span>${laneCount === 1 ? T('城の一撃') : T('城の一撃') + ' ' + LANE_MARK[laneCount][l]}</span></button>`).join('')}</div>
     <button id="spd" class="sub mini">▶︎×1</button>
     <button id="pause" class="sub mini">⏸</button>
     <button id="quit" class="sub mini">✕</button>
@@ -355,7 +377,7 @@ function play() {
     const after = UNITS[k].stats[lvOf(0, k) - 1];
     toast(after.img !== before.img ? T('{a} が {b} に進化！', { a: T(before.name), b: T(after.name) }) : T('{name} が Lv{n} に！', { name: T(after.name), n: lvOf(0, k) }) + ' ' + T(after.desc));
   });
-  $('strike').onclick = () => strike(0);
+  app.querySelectorAll('[data-sl]').forEach(b => b.onclick = () => { if (!strike(0, +b.dataset.sl) && B.gauge[0] < STRIKE.charge) toast(T('ゲージがたまっていない')); });
   $('spd').onclick = () => { B.speed = B.speed === 1 ? 2 : 1; $('spd').textContent = '▶︎×' + B.speed; };
   $('pause').onclick = () => { B.paused = !B.paused; $('pause').textContent = B.paused ? '▶︎' : '⏸'; };
   $('quit').onclick = () => { B.over = 'quit'; };
@@ -400,6 +422,7 @@ function stopLoop() { if (raf) cancelAnimationFrame(raf); raf = 0; if (drag) { d
 function loop(now) {
   const dt = Math.min(0.1, (now - lastT) / 1000); lastT = now;
   if (!B.paused && !B.over) { acc += dt * B.speed; while (acc >= TICK) { sim(); acc -= TICK; if (B.over) break; } }
+  for (const f of B.fx) if (f.flagGet !== undefined && !f.told) { f.told = true; toast(f.flagGet === 0 ? T('旗を取った！ コインが多くたまる') : T('旗を取られた…')); }
   for (const t of toasts) t.t -= dt;
   toasts = toasts.filter(t => t.t > 0);
   draw(); hud();
@@ -434,8 +457,7 @@ function hud() {
     b.querySelector('small').textContent = max ? 'MAX' : upCost(0, k);
   });
   const g = B.gauge[0] / STRIKE.charge;
-  $('gauge').style.width = g * 100 + '%';
-  $('strike').classList.toggle('ready', g >= 1);
+  app.querySelectorAll('[data-sl]').forEach(b => { b.querySelector('i').style.width = g * 100 + '%'; b.classList.toggle('ready', g >= 1); });
   $('toasts').innerHTML = toasts.slice(-2).map(t => `<div class="toast">${esc(t.msg)}</div>`).join('');
 }
 
@@ -458,7 +480,8 @@ function draw() {
     if (drag) { cx.strokeStyle = hot ? '#fff' : 'rgba(255,255,255,.5)'; cx.setLineDash(hot ? [] : [6, 6]); cx.lineWidth = hot ? 3 : 2; cx.strokeRect(rx + 2, 2, ROAD() - 4, H - 4); cx.setLineDash([]); }
   }
   // 城の一撃が届く範囲(ゲージがたまっているとき)
-  if (B.gauge[0] >= STRIKE.charge) { cx.fillStyle = 'rgba(255,215,0,.13)'; cx.fillRect(0, Y(STRIKE.reach), W, H - Y(STRIKE.reach)); }
+  if (B.gauge[0] >= STRIKE.charge) { cx.fillStyle = 'rgba(255,215,0,.16)'; for (let l = 0; l < B.lanes; l++) cx.fillRect(laneX(l) - ROAD() / 2, Y(STRIKE.reach), ROAD(), H - Y(STRIKE.reach)); }
+  for (let l = 0; l < B.lanes; l++) flagDraw(l);
   castle(Y(LANE), 1); castle(Y(0), 0);
   // キャラ(奥=上から順に)
   const us = B.units.slice().sort((a, b) => Y(a.p) - Y(b.p) || a.id - b.id);
@@ -483,10 +506,27 @@ function draw() {
     if (f.boom) { cx.fillStyle = '#fff3'; cx.beginPath(); cx.arc(X(f.x, f.l), Y(f.p), SPR() * 0.25 * (1.4 - f.t), 0, 7); cx.fill(); }
     if (f.strike !== undefined) {
       const s = f.strike, y0 = Y(homeP(s)), y1 = Y(s === 0 ? STRIKE.reach : LANE - STRIKE.reach);
-      cx.fillStyle = 'rgba(255,200,40,.45)'; cx.fillRect(0, Math.min(y0, y1), W, Math.abs(y1 - y0));
+      cx.fillStyle = 'rgba(255,200,40,.5)'; cx.fillRect(laneX(f.l) - ROAD() / 2, Math.min(y0, y1), ROAD(), Math.abs(y1 - y0));
     }
     cx.globalAlpha = 1;
   }
+}
+const LANE_MARK = { 2: ['◀', '▶'], 3: ['◀', '▲', '▶'] };
+const FLAG_COL = { '-1': '#f2efe6', 0: '#3fa9f5', 1: '#e74c3c' };
+function flagDraw(l) {
+  const f = B.flags[l], x = laneX(l), y = Y(FLAG.at), s = SPR();
+  // 取り合う範囲
+  cx.fillStyle = 'rgba(255,255,255,.08)'; cx.fillRect(x - ROAD() / 2, Y(FLAG.at + FLAG.zone), ROAD(), Y(FLAG.at - FLAG.zone) - Y(FLAG.at + FLAG.zone));
+  // 旗ざお と 旗
+  const px = x + ROAD() * 0.42, top = y - s * 0.55;
+  cx.strokeStyle = '#4a3a2a'; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(px, y + s * 0.1); cx.lineTo(px, top); cx.stroke();
+  cx.fillStyle = FLAG_COL[f.own]; cx.strokeStyle = 'rgba(0,0,0,.45)'; cx.lineWidth = 1;
+  cx.beginPath(); cx.moveTo(px, top); cx.lineTo(px - s * 0.38, top + s * 0.13); cx.lineTo(px, top + s * 0.26); cx.closePath(); cx.fill(); cx.stroke();
+  // どちらにかたむいているか(青 = 自分、赤 = 相手)
+  const w = ROAD() * 0.5, bx = x - w / 2, by = y + s * 0.16;
+  cx.fillStyle = 'rgba(0,0,0,.4)'; cx.fillRect(bx, by, w, 4);
+  if (f.prog > 0) { cx.fillStyle = '#3fa9f5'; cx.fillRect(x, by, w / 2 * f.prog, 4); }
+  if (f.prog < 0) { cx.fillStyle = '#e74c3c'; cx.fillRect(x + w / 2 * f.prog, by, -w / 2 * f.prog, 4); }
 }
 function castle(y, side) {
   const w = B.lanes === 1 ? W * 0.5 : W * 0.86, h = H * 0.07, x = W / 2 - w / 2, top = side ? y - h * 1.05 : y - h * 0.05;
