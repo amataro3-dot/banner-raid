@@ -5,7 +5,7 @@
 
 const LANE = 100;
 const CASTLE_HP = 5000;
-const START_COIN = 150;
+const START_COIN = 250;
 const COIN_PER_SEC = 18;
 const COIN_MAX = 2000;
 const KILL_BONUS = 0.25;        // 敵を倒すと、その敵の値段 × これのコイン
@@ -53,5 +53,6 @@ const ENEMIES = {
   assassin: { name: '刺客',       cost: 320, cd: 14, hp: 900,  dmg: 90, rate: 0.9, range: 6,  spd: 11, size: 1.1 },
 };
 
-/* CPU の強さ(コインのたまる速さの倍率) */
-const CPU_LEVELS = { easy: 0.7, normal: 0.9, hard: 1.15 };
+/* CPU の強さ(コインのたまる速さの倍率)。CPU は最初の CPU_WAIT 秒は出撃しない */
+const CPU_WAIT = 8;
+const CPU_LEVELS = { easy: 0.5, normal: 0.7, hard: 0.95 };

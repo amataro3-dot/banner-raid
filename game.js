@@ -38,7 +38,7 @@ let cpuLevel = CPU_LEVELS[LS.get('br-cpu')] ? LS.get('br-cpu') : 'normal';
 function newBattle(seed) {
   B = {
     tick: 0, t: 0, rng: makeRng(seed || 1), uid: 1,
-    coin: [START_COIN, START_COIN], castle: [CASTLE_HP, CASTLE_HP], gauge: [0, 0],
+    coin: [START_COIN, START_COIN * 0.6], castle: [CASTLE_HP, CASTLE_HP], gauge: [0, 0],
     cd: [{}, {}], deck: [picks.slice(), Object.keys(ENEMIES)], kind: ['u', 'e'],
     rate: [1, CPU_LEVELS[cpuLevel]],
     units: [], fx: [], over: null, kills: [0, 0], spent: [0, 0],
@@ -190,6 +190,7 @@ function cpuPick() {
 function cpuThink(dt) {
   const A = B.ai;
   A.think -= dt; if (A.think > 0) return;
+  if (B.t < CPU_WAIT) return;
   A.think = 0.5;
   // 城のまわりに相手が来たら、城の一撃
   const close = B.units.filter(u => u.side === 0 && fromHome(1, u.p) <= STRIKE.reach);
