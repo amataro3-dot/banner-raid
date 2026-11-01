@@ -36,18 +36,20 @@ let picks = (LS.get('br-picks') || '').split(',').filter(k => UNITS[k]).slice(0,
 let cpuLevel = CPU_LEVELS[LS.get('br-cpu')] ? LS.get('br-cpu') : 'normal';
 let laneCount = [1, 2, 3].includes(+LS.get('br-lanes')) ? +LS.get('br-lanes') : 2;   // 道の数(基本は2本。1本・3本も選べる)
 
-function newBattle(seed) {
+/* opt.online: { decks: [side0 の4体, side1 の4体], lanes } のときはオンライン対戦(CPU なし、2人とも同じ条件) */
+function newBattle(seed, opt) {
+  const on = opt && opt.online, lanes = on ? on.lanes : laneCount;
   B = {
-    tick: 0, t: 0, rng: makeRng(seed || 1), uid: 1, lanes: laneCount,
-    coin: [START_COIN, START_COIN * 0.6], castle: [CASTLE_HP, CASTLE_HP], gauge: [0, 0],
-    flags: Array.from({ length: laneCount }, () => ({ own: -1, prog: 0 })),   // prog: +1 で自分、-1 で相手のもの
-    cd: [{}, {}], lv: [{}, {}], deck: [picks.slice(), []], kind: ['u', 'u'],   // kind 'e' にすると CPU軍(ゴブリンたち)で戦う
-    rate: [1, CPU_LEVELS[cpuLevel]],
+    tick: 0, t: 0, rng: makeRng(seed || 1), uid: 1, lanes,
+    coin: [START_COIN, on ? START_COIN : START_COIN * 0.6], castle: [CASTLE_HP, CASTLE_HP], gauge: [0, 0],
+    flags: Array.from({ length: lanes }, () => ({ own: -1, prog: 0 })),   // prog: +1 で side 0、-1 で side 1 のもの
+    cd: [{}, {}], lv: [{}, {}], deck: on ? [on.decks[0].slice(), on.decks[1].slice()] : [picks.slice(), []], kind: ['u', 'u'],   // kind 'e' にすると CPU軍(ゴブリンたち)で戦う
+    rate: [1, on ? 1 : CPU_LEVELS[cpuLevel]], cpu: !on, online: !!on,
     units: [], fx: [], over: null, kills: [0, 0], spent: [0, 0],
     ai: { next: null, think: 0 },
     speed: 1, paused: false,
   };
-  B.deck[1] = cpuDeck(B.rng);
+  if (!on) B.deck[1] = cpuDeck(B.rng);
 }
 const lvOf = (side, k) => B.lv[side][k] || 1;
 /* いまのレベルの数値(CPU軍は HP・攻撃を ENEMY_LV 倍) */
@@ -119,7 +121,7 @@ function sim() {
     for (const k in B.cd[s]) if (B.cd[s][k] > 0) B.cd[s][k] -= dt;
   }
   flagStep(dt);
-  if (B.cpu !== false) cpuThink(dt);
+  if (B.cpu) cpuThink(dt);
 
   const live = B.units.filter(u => u.hp > 0);
   for (const u of live) {
@@ -314,15 +316,17 @@ function home() {
     <div>${T('⑥ 相手の城のHPを先に0にしたほうが勝ち(5分たったら、城のHPが多いほうの勝ち)')}</div>
   </div>
   <button id="solo" class="wide">${T('ひとりで練習(CPU対戦)')}</button>
-  <button class="wide sub" disabled>${T('オンライン対戦(準備中)')}</button>
+  ${window.NO_ONLINE ? `<button class="wide sub" disabled>${T('オンライン対戦は muddys-games.com で遊べます')}</button>` : `<button id="online" class="wide">${T('オンライン対戦(2人)')}</button>`}
   <div class="dim small">${T('試作版です。キャラの強さは、遊びながら調整します')}</div>
   ${FOOT()}`;
   langSwitchInit(() => { });
-  $('solo').onclick = draft;
+  $('solo').onclick = () => draft();
+  if ($('online')) $('online').onclick = () => netHome();
 }
 
 /* ---------- 画面: キャラ選び ---------- */
-function draft() {
+/* online を渡すと、オンライン対戦のキャラ選び(CPU の強さ・道の数はなし。「決定」で net.js へ) */
+function draft(online) {
   stopLoop();
   const cards = UNIT_KEYS.map(k => {
     const u = UNITS[k], on = picks.includes(k), a = u.stats[0], z = u.stats[2], evo = z.img !== a.img;
@@ -340,27 +344,39 @@ function draft() {
   <h1>${T('キャラを4体選ぶ')}</h1>
   <div class="dim">${T('選んだ4体だけを、試合で出撃できます({n}/4)', { n: picks.length })}</div>
   <div class="ugrid">${cards}</div>
-  <div class="seg"><span class="dim small">${T('CPUの強さ')}</span> ${lv}</div>
-  <div class="seg"><span class="dim small">${T('道の数')}</span> ${ln}</div>
-  <button id="go" class="wide" ${picks.length === 4 ? '' : 'disabled'}>${T('出陣！')}</button>
-  <button id="back" class="sub">${T('もどる')}</button>`;
+  ${online ? `<div class="dim small">${online.note || ''}</div>` : `<div class="seg"><span class="dim small">${T('CPUの強さ')}</span> ${lv}</div>
+  <div class="seg"><span class="dim small">${T('道の数')}</span> ${ln}</div>`}
+  <button id="go" class="wide" ${picks.length === 4 ? '' : 'disabled'}>${online ? T('これで決定') : T('出陣！')}</button>
+  <button id="back" class="sub">${online ? T('部屋を出る') : T('もどる')}</button>`;
   app.querySelectorAll('.ucard').forEach(b => b.onclick = () => {
     const k = b.dataset.k;
     if (picks.includes(k)) picks = picks.filter(x => x !== k);
     else if (picks.length < 4) picks.push(k);
     else return;
-    const y = window.scrollY; draft(); window.scrollTo(0, y);
+    const y = window.scrollY; draft(online); window.scrollTo(0, y);
   });
   app.querySelectorAll('[data-lv]').forEach(b => b.onclick = () => { cpuLevel = b.dataset.lv; LS.set('br-cpu', cpuLevel); const y = window.scrollY; draft(); window.scrollTo(0, y); });
   app.querySelectorAll('[data-ln]').forEach(b => b.onclick = () => { laneCount = +b.dataset.ln; LS.set('br-lanes', laneCount); const y = window.scrollY; draft(); window.scrollTo(0, y); });
-  $('go').onclick = () => { LS.set('br-picks', picks.join(',')); play(); };
-  $('back').onclick = home;
+  $('go').onclick = () => { LS.set('br-picks', picks.join(',')); if (online) online.done(picks.slice()); else play(); };
+  $('back').onclick = () => (online ? netLeave() : home());
 }
 
 /* ---------- 画面: 対戦 ---------- */
 let cv, cx, W = 360, H = 480, raf = 0, lastT = 0, acc = 0, intro = 0;
-function play() {
-  newBattle((Date.now() & 0x7fffffff) | 1);
+let ME = 0;   // 自分の陣営(ひとりで練習とホストは 0、オンラインで入った人は 1)
+const foeName = () => (B && B.online ? netFoeName() : 'CPU');
+/* 自分の操作: ひとりで練習ならすぐ、オンラインなら少しあとのコマで2人同時に(net.js) */
+function act(a, k, lane) {
+  if (B.online) return netSend(a, k, lane);
+  if (a === 's') return spawn(0, k, lane);
+  if (a === 'u') return levelUp(0, k);
+  if (a === 'x') return strike(0, lane);
+}
+/* opt を渡すとオンライン対戦(newBattle の opt と同じ。opt.side が自分の陣営) */
+function play(opt) {
+  ME = opt ? opt.side : 0;
+  newBattle(opt ? opt.seed : (Date.now() & 0x7fffffff) | 1, opt && { online: opt });
+  const deck = B.deck[ME];
   app.innerHTML = `
   <div class="hud">
     <div class="hp foe"><span>${T('相手の城')}</span><i><b id="hc"></b></i><em id="hcn"></em></div>
@@ -371,11 +387,11 @@ function play() {
     <div class="hp me"><span>${T('自分の城')}</span><i><b id="hb"></b></i><em id="hbn"></em></div>
     <div class="coin">💰 <b id="hm">0</b></div>
   </div>
-  <div class="pal">${picks.map(k => `<div class="slot"><button class="pb r-${UNITS[k].role}" data-k="${k}"><img src="${imgSrc(UNITS[k].stats[0].img)}" alt=""><span><b class="lvb">Lv1</b> ${UNITS[k].cost}</span><i class="cdv"></i></button><button class="up" data-up="${k}">⬆<small></small></button></div>`).join('')}</div>
+  <div class="pal">${deck.map(k => `<div class="slot"><button class="pb r-${UNITS[k].role}" data-k="${k}"><img src="${imgSrc(UNITS[k].stats[0].img)}" alt=""><span><b class="lvb">Lv1</b> ${UNITS[k].cost}</span><i class="cdv"></i></button><button class="up" data-up="${k}">⬆<small></small></button></div>`).join('')}</div>
   <div class="row">
-    <div class="strikes">${Array.from({ length: laneCount }, (_, l) => `<button class="strike" data-sl="${l}"><i></i><span>${laneCount === 1 ? T('城の一撃') : T('城の一撃') + ' ' + LANE_MARK[laneCount][l]}</span></button>`).join('')}</div>
-    <button id="spd" class="sub mini">▶︎×1</button>
-    <button id="pause" class="sub mini">⏸</button>
+    <div class="strikes">${Array.from({ length: B.lanes }, (_, l) => `<button class="strike" data-sl="${l}"><i></i><span>${B.lanes === 1 ? T('城の一撃') : T('城の一撃') + ' ' + LANE_MARK[B.lanes][l]}</span></button>`).join('')}</div>
+    ${B.online ? '' : `<button id="spd" class="sub mini">▶︎×1</button>
+    <button id="pause" class="sub mini">⏸</button>`}
     <button id="quit" class="sub mini">✕</button>
   </div>`;
   cv = $('cv'); cx = cv.getContext('2d');
@@ -385,12 +401,12 @@ function play() {
     b.onpointerdown = ev => {
       const k = b.dataset.k;
       if (B.over || drag) return;
-      if (B.coin[0] < UNITS[k].cost) { toast(T('コインが足りない')); return; }
-      if (B.cd[0][k] > 0) { toast(T('まだ出せない')); return; }
+      if (B.coin[ME] < UNITS[k].cost) { toast(T('コインが足りない')); return; }
+      if (B.cd[ME][k] > 0) { toast(T('まだ出せない')); return; }
       ev.preventDefault();
       try { b.setPointerCapture(ev.pointerId); } catch (e) { }
       const g = document.createElement('img');
-      g.src = imgSrc(UNITS[k].stats[lvOf(0, k) - 1].img); g.className = 'ghost'; document.body.appendChild(g);
+      g.src = imgSrc(UNITS[k].stats[lvOf(ME, k) - 1].img); g.className = 'ghost'; document.body.appendChild(g);
       drag = { k, id: ev.pointerId, g, lane: -1, x0: ev.clientX, y0: ev.clientY, moved: false };
       dragMove(ev);
     };
@@ -400,19 +416,22 @@ function play() {
     b.oncontextmenu = ev => ev.preventDefault();
   });
   app.querySelectorAll('.up').forEach(b => b.onclick = () => {
-    const k = b.dataset.up, before = UNITS[k].stats[lvOf(0, k) - 1];
-    if (lvOf(0, k) >= LV_MAX) return;
-    if (!levelUp(0, k)) { toast(T('コインが足りない')); return; }
-    const after = UNITS[k].stats[lvOf(0, k) - 1];
-    toast(after.img !== before.img ? T('{a} が {b} に進化！', { a: T(before.name), b: T(after.name) }) : T('{name} が Lv{n} に！', { name: T(after.name), n: lvOf(0, k) }) + ' ' + T(after.desc));
+    const k = b.dataset.up, before = UNITS[k].stats[lvOf(ME, k) - 1];
+    if (lvOf(ME, k) >= LV_MAX) return;
+    if (B.coin[ME] < upCost(ME, k)) { toast(T('コインが足りない')); return; }
+    if (act('u', k, 0) === false) return;
+    const after = UNITS[k].stats[lvOf(ME, k) - 1 + (B.online ? 1 : 0)];
+    toast(after.img !== before.img ? T('{a} が {b} に進化！', { a: T(before.name), b: T(after.name) }) : T('{name} が Lv{n} に！', { name: T(after.name), n: lvOf(ME, k) + (B.online ? 1 : 0) }) + ' ' + T(after.desc));
   });
-  app.querySelectorAll('[data-sl]').forEach(b => b.onclick = () => { if (!strike(0, +b.dataset.sl) && B.gauge[0] < STRIKE.charge) toast(T('ゲージがたまっていない')); });
-  $('spd').onclick = () => { B.speed = B.speed === 1 ? 2 : 1; $('spd').textContent = '▶︎×' + B.speed; };
-  $('pause').onclick = () => { B.paused = !B.paused; $('pause').textContent = B.paused ? '▶︎' : '⏸'; };
-  $('quit').onclick = () => { B.over = 'quit'; };
+  app.querySelectorAll('[data-sl]').forEach(b => b.onclick = () => { if (B.gauge[ME] < STRIKE.charge) { toast(T('ゲージがたまっていない')); return; } act('x', null, VL(+b.dataset.sl)); });
+  if (!B.online) {
+    $('spd').onclick = () => { B.speed = B.speed === 1 ? 2 : 1; $('spd').textContent = '▶︎×' + B.speed; };
+    $('pause').onclick = () => { B.paused = !B.paused; $('pause').textContent = B.paused ? '▶︎' : '⏸'; };
+  }
+  $('quit').onclick = () => { if (B.online) { if ($('quit').classList.contains('sure')) netLeave(); else { $('quit').classList.add('sure'); $('quit').textContent = T('本当に出る？'); } } else B.over = 'quit'; };
   // 最初に、おたがいの4体を見せる(タップか3秒で始まる)
   intro = 3;
-  $('intro').innerHTML = `<div class="dim">CPU</div><div class="team foe">${teamImgs(1)}</div><div class="vs">VS</div><div class="team">${teamImgs(0)}</div><div class="dim">${T('自分')}</div><div class="small">${T('タップでスタート')}</div>`;
+  $('intro').innerHTML = `<div class="dim">${esc(foeName())}</div><div class="team foe">${teamImgs(1 - ME)}</div><div class="vs">VS</div><div class="team">${teamImgs(ME)}</div><div class="dim">${T('自分')}</div><div class="small">${T('タップでスタート')}</div>`;
   $('intro').onclick = () => { intro = 0; };
   lastT = performance.now(); acc = 0;
   raf = requestAnimationFrame(loop);
@@ -433,9 +452,10 @@ function dragEnd(ev, drop) {
   else if (!d.moved) { if (B.lanes === 1) trySpawn(d.k, 0); else toast(T('道までドラッグして出撃')); }
 }
 function trySpawn(k, lane) {
-  if (spawn(0, k, lane)) return;
-  if (B.coin[0] < UNITS[k].cost) toast(T('コインが足りない'));
-  else if (B.cd[0][k] > 0) toast(T('まだ出せない'));
+  lane = VL(lane);   // 画面の道 → 本当の道(相手側から見ているときは左右が逆)
+  if (canSpawn(ME, k)) { act('s', k, lane); return; }
+  if (B.coin[ME] < UNITS[k].cost) toast(T('コインが足りない'));
+  else if (B.cd[ME][k] > 0) toast(T('まだ出せない'));
 }
 let toasts = [];
 function toast(msg) { toasts.push({ msg, t: 1.8 }); }
@@ -456,29 +476,31 @@ function loop(now) {
   const dt = Math.min(0.1, (now - lastT) / 1000); lastT = now;
   if (intro > 0) { intro -= dt; if (intro <= 0 && $('intro')) $('intro').hidden = true; }
   else if ($('intro') && !$('intro').hidden) $('intro').hidden = true;
-  if (!B.paused && !B.over && intro <= 0) { acc += dt * B.speed; while (acc >= TICK) { sim(); acc -= TICK; if (B.over) break; } }
-  for (const f of B.fx) if (f.flagGet !== undefined && !f.told) { f.told = true; toast(f.flagGet === 0 ? T('旗を取った！ コインが多くたまる') : T('旗を取られた…')); }
+  if (B.online) { if (!B.over && intro <= 0) netStep(dt); }
+  else if (!B.paused && !B.over && intro <= 0) { acc += dt * B.speed; while (acc >= TICK) { sim(); acc -= TICK; if (B.over) break; } }
+  for (const f of B.fx) if (f.flagGet !== undefined && !f.told) { f.told = true; toast(f.flagGet === ME ? T('旗を取った！ コインが多くたまる') : T('旗を取られた…')); }
   for (const t of toasts) t.t -= dt;
   toasts = toasts.filter(t => t.t > 0);
   draw(); hud();
   if (B.over) { raf = 0; if (B.over === 'quit') home(); else setTimeout(end, 900); return; }
+  if (B.online) netHud();
   raf = requestAnimationFrame(loop);
 }
 
 function hud() {
   const pc = v => Math.max(0, v / CASTLE_HP * 100) + '%';
-  $('hb').style.width = pc(B.castle[0]); $('hc').style.width = pc(B.castle[1]);
-  $('hbn').textContent = Math.ceil(B.castle[0]); $('hcn').textContent = Math.ceil(B.castle[1]);
-  $('hm').textContent = Math.floor(B.coin[0]);
+  $('hb').style.width = pc(B.castle[ME]); $('hc').style.width = pc(B.castle[1 - ME]);
+  $('hbn').textContent = Math.ceil(B.castle[ME]); $('hcn').textContent = Math.ceil(B.castle[1 - ME]);
+  $('hm').textContent = Math.floor(B.coin[ME]);
   const left = Math.max(0, Math.ceil(TIME_LIMIT - B.t));
   $('ht').textContent = Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0');
   app.querySelectorAll('.pb').forEach(b => {
-    const k = b.dataset.k, cd = B.cd[0][k] || 0;
-    b.classList.toggle('poor', B.coin[0] < UNITS[k].cost);
+    const k = b.dataset.k, cd = B.cd[ME][k] || 0;
+    b.classList.toggle('poor', B.coin[ME] < UNITS[k].cost);
     b.classList.toggle('on', !!drag && drag.k === k);
     b.querySelector('.cdv').style.height = (cd > 0 ? cd / UNITS[k].cd * 100 : 0) + '%';
     // レベルが変わったら、絵と Lv を書きかえる
-    const lv = lvOf(0, k);
+    const lv = lvOf(ME, k);
     if (b.dataset.lv !== String(lv)) {
       b.dataset.lv = lv;
       b.querySelector('img').src = imgSrc(UNITS[k].stats[lv - 1].img);
@@ -486,22 +508,24 @@ function hud() {
     }
   });
   app.querySelectorAll('.up').forEach(b => {
-    const k = b.dataset.up, max = lvOf(0, k) >= LV_MAX;
-    b.disabled = max || B.coin[0] < upCost(0, k);
+    const k = b.dataset.up, max = lvOf(ME, k) >= LV_MAX;
+    b.disabled = max || B.coin[ME] < upCost(ME, k) || (B.online && !!NET.pend['u' + k]);
     b.classList.toggle('max', max);
-    b.querySelector('small').textContent = max ? 'MAX' : upCost(0, k);
+    b.querySelector('small').textContent = max ? 'MAX' : upCost(ME, k);
   });
-  const g = B.gauge[0] / STRIKE.charge;
+  const g = B.gauge[ME] / STRIKE.charge;
   app.querySelectorAll('[data-sl]').forEach(b => { b.querySelector('i').style.width = g * 100 + '%'; b.classList.toggle('ready', g >= 1); });
   $('toasts').innerHTML = toasts.slice(-2).map(t => `<div class="toast">${esc(t.msg)}</div>`).join('');
 }
 
 /* ---------- 戦場をかく ---------- */
 const TOP = () => H * 0.17, BOT = () => H * 0.9;
-const Y = p => BOT() - (p / LANE) * (BOT() - TOP());
+const VP = p => (ME ? LANE - p : p);                 // 相手側から見ているときは上下が逆
+const VL = l => (ME && B ? B.lanes - 1 - l : l);     // 左右も逆(180度まわして見る)
+const Y = p => BOT() - (VP(p) / LANE) * (BOT() - TOP());
 const ROAD = () => W * (B.lanes === 1 ? 0.6 : B.lanes === 2 ? 0.38 : 0.28);
 const laneX = l => W * (l + 0.5) / B.lanes;
-const X = (x, l) => laneX(l || 0) + x * ROAD() * 0.33;
+const X = (x, l) => laneX(VL(l || 0)) + (ME ? -x : x) * ROAD() * 0.33;
 const SPR = () => W * (B.lanes === 1 ? 0.27 : B.lanes === 2 ? 0.21 : 0.17);
 function draw() {
   cx.fillStyle = '#5d8a4a'; cx.fillRect(0, 0, W, H);
@@ -515,17 +539,17 @@ function draw() {
     if (drag) { cx.strokeStyle = hot ? '#fff' : 'rgba(255,255,255,.5)'; cx.setLineDash(hot ? [] : [6, 6]); cx.lineWidth = hot ? 3 : 2; cx.strokeRect(rx + 2, 2, ROAD() - 4, H - 4); cx.setLineDash([]); }
   }
   // 城の一撃が届く範囲(ゲージがたまっているとき)
-  if (B.gauge[0] >= STRIKE.charge) { cx.fillStyle = 'rgba(255,215,0,.16)'; for (let l = 0; l < B.lanes; l++) cx.fillRect(laneX(l) - ROAD() / 2, Y(STRIKE.reach), ROAD(), H - Y(STRIKE.reach)); }
+  if (B.gauge[ME] >= STRIKE.charge) { cx.fillStyle = 'rgba(255,215,0,.16)'; const ry = Y(ME ? LANE - STRIKE.reach : STRIKE.reach); for (let l = 0; l < B.lanes; l++) cx.fillRect(laneX(l) - ROAD() / 2, ry, ROAD(), H - ry); }
   for (let l = 0; l < B.lanes; l++) flagDraw(l);
-  castle(Y(LANE), 1); castle(Y(0), 0);
+  castle(Y(homeP(1 - ME)), 1); castle(Y(homeP(ME)), 0);
   // キャラ(奥=上から順に)
   const us = B.units.slice().sort((a, b) => Y(a.p) - Y(b.p) || a.id - b.id);
   for (const u of us) {
     const im = img(u.img);
     const w = SPR() * (u.d.size || 1), h = w * 100 / 176;
-    const x = X(u.x, u.lane), y = Y(u.p) - (u.act > 0 ? (u.side ? -3 : 3) : 0);
+    const x = X(u.x, u.lane), y = Y(u.p) - (u.act > 0 ? (u.side !== ME ? -3 : 3) : 0);
     // 足もとの影: 自分は青、相手は赤
-    cx.fillStyle = u.side ? 'rgba(220,40,40,.55)' : 'rgba(40,130,230,.55)';
+    cx.fillStyle = u.side !== ME ? 'rgba(220,40,40,.55)' : 'rgba(40,130,230,.55)';
     cx.beginPath(); cx.ellipse(x - w * 0.08, y + h * 0.42, w * 0.26, h * 0.13, 0, 0, 7); cx.fill();
     if (u.slowT > 0) { cx.fillStyle = 'rgba(124,200,255,.35)'; cx.beginPath(); cx.ellipse(x, y, w * 0.3, h * 0.45, 0, 0, 7); cx.fill(); }
     if (im.complete && im.naturalWidth) {
@@ -533,7 +557,7 @@ function draw() {
       cx.drawImage(im, x - w / 2, y - h / 2, w, h);
       cx.globalAlpha = 1;
     }
-    bar(x, y - h * 0.5 - 4, u.hp / u.max, u.side ? '#e74c3c' : '#3fa9f5', w * 0.5);
+    bar(x, y - h * 0.5 - 4, u.hp / u.max, u.side !== ME ? '#e74c3c' : '#3fa9f5', w * 0.5);
   }
   // 攻撃などの演出
   for (const f of B.fx) {
@@ -544,7 +568,7 @@ function draw() {
     if (f.boom) { cx.fillStyle = '#fff3'; cx.beginPath(); cx.arc(X(f.x, f.l), Y(f.p), SPR() * 0.25 * (1.4 - f.t), 0, 7); cx.fill(); }
     if (f.strike !== undefined) {
       const s = f.strike, y0 = Y(homeP(s)), y1 = Y(s === 0 ? STRIKE.reach : LANE - STRIKE.reach);
-      cx.fillStyle = 'rgba(255,200,40,.5)'; cx.fillRect(laneX(f.l) - ROAD() / 2, Math.min(y0, y1), ROAD(), Math.abs(y1 - y0));
+      cx.fillStyle = 'rgba(255,200,40,.5)'; cx.fillRect(laneX(VL(f.l)) - ROAD() / 2, Math.min(y0, y1), ROAD(), Math.abs(y1 - y0));
     }
     cx.globalAlpha = 1;
   }
@@ -552,19 +576,19 @@ function draw() {
 const LANE_MARK = { 2: ['◀', '▶'], 3: ['◀', '▲', '▶'] };
 const FLAG_COL = { '-1': '#f2efe6', 0: '#3fa9f5', 1: '#e74c3c' };
 function flagDraw(l) {
-  const f = B.flags[l], x = laneX(l), y = Y(FLAG.at), s = SPR();
+  const f = B.flags[l], x = laneX(VL(l)), y = Y(FLAG.at), s = SPR(), prog = ME ? -f.prog : f.prog;
   // 取り合う範囲
   cx.fillStyle = 'rgba(255,255,255,.08)'; cx.fillRect(x - ROAD() / 2, Y(FLAG.at + FLAG.zone), ROAD(), Y(FLAG.at - FLAG.zone) - Y(FLAG.at + FLAG.zone));
   // 旗ざお と 旗
   const px = x + ROAD() * 0.42, top = y - s * 0.55;
   cx.strokeStyle = '#4a3a2a'; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(px, y + s * 0.1); cx.lineTo(px, top); cx.stroke();
-  cx.fillStyle = FLAG_COL[f.own]; cx.strokeStyle = 'rgba(0,0,0,.45)'; cx.lineWidth = 1;
+  cx.fillStyle = FLAG_COL[f.own < 0 ? -1 : f.own === ME ? 0 : 1]; cx.strokeStyle = 'rgba(0,0,0,.45)'; cx.lineWidth = 1;
   cx.beginPath(); cx.moveTo(px, top); cx.lineTo(px - s * 0.38, top + s * 0.13); cx.lineTo(px, top + s * 0.26); cx.closePath(); cx.fill(); cx.stroke();
   // どちらにかたむいているか(青 = 自分、赤 = 相手)
   const w = ROAD() * 0.5, bx = x - w / 2, by = y + s * 0.16;
   cx.fillStyle = 'rgba(0,0,0,.4)'; cx.fillRect(bx, by, w, 4);
-  if (f.prog > 0) { cx.fillStyle = '#3fa9f5'; cx.fillRect(x, by, w / 2 * f.prog, 4); }
-  if (f.prog < 0) { cx.fillStyle = '#e74c3c'; cx.fillRect(x + w / 2 * f.prog, by, -w / 2 * f.prog, 4); }
+  if (prog > 0) { cx.fillStyle = '#3fa9f5'; cx.fillRect(x, by, w / 2 * prog, 4); }
+  if (prog < 0) { cx.fillStyle = '#e74c3c'; cx.fillRect(x + w / 2 * prog, by, -w / 2 * prog, 4); }
 }
 function castle(y, side) {
   const w = B.lanes === 1 ? W * 0.5 : W * 0.86, h = H * 0.07, x = W / 2 - w / 2, top = side ? y - h * 1.05 : y - h * 0.05;
@@ -586,25 +610,25 @@ function bar(x, y, p, col, w) {
 const teamImgs = side => B.deck[side].map(k => `<img src="${imgSrc(UNITS[k].stats[lvOf(side, k) - 1].img)}" alt="">`).join('');
 function end() {
   if (!B || !B.over) return;
-  const s = Math.floor(B.t), r = B.over;
+  const s = Math.floor(B.t), r0 = B.over;
+  const r = r0 === 'forfeit' ? 'win' : ME && r0 === 'win' ? 'lose' : ME && r0 === 'lose' ? 'win' : r0;
   const ttl = r === 'win' ? T('🏆 勝利！') : r === 'lose' ? T('🏳️ 敗北…') : T('引き分け');
-  const why = B.castle[1] <= 0 ? T('相手の城を落とした！') : B.castle[0] <= 0 ? T('城を落とされた…') : T('時間切れ。城のHPでくらべた');
+  const why = r0 === 'forfeit' ? T('相手がいなくなった') : B.castle[1 - ME] <= 0 ? T('相手の城を落とした！') : B.castle[ME] <= 0 ? T('城を落とされた…') : T('時間切れ。城のHPでくらべた');
   app.innerHTML = `
   <h1 class="title">${ttl}</h1>
   <div class="card">
     <div>${why}</div>
-    <div class="dim">${T('自分の城 {a} / 相手の城 {b}', { a: Math.ceil(B.castle[0]), b: Math.ceil(B.castle[1]) })}</div>
-    <div class="dim">${T('時間 {m}分{s}秒・倒した敵 {k}', { m: Math.floor(s / 60), s: s % 60, k: B.kills[0] })}</div>
-    <div class="vsrow"><span class="dim small">${T('自分')}</span><div class="team">${teamImgs(0)}</div></div>
-    <div class="vsrow"><span class="dim small">CPU</span><div class="team foe">${teamImgs(1)}</div></div>
+    <div class="dim">${T('自分の城 {a} / 相手の城 {b}', { a: Math.ceil(B.castle[ME]), b: Math.ceil(B.castle[1 - ME]) })}</div>
+    <div class="dim">${T('時間 {m}分{s}秒・倒した敵 {k}', { m: Math.floor(s / 60), s: s % 60, k: B.kills[ME] })}</div>
+    <div class="vsrow"><span class="dim small">${T('自分')}</span><div class="team">${teamImgs(ME)}</div></div>
+    <div class="vsrow"><span class="dim small">${esc(foeName())}</span><div class="team foe">${teamImgs(1 - ME)}</div></div>
   </div>
-  <button id="again" class="wide">${T('同じキャラでもう一回')}</button>
+  ${B.online ? netEndButtons() : `<button id="again" class="wide">${T('同じキャラでもう一回')}</button>
   <button id="re" class="sub">${T('キャラを選びなおす')}</button>
-  <button id="hm2" class="sub">${T('ホームへ')}</button>`;
+  <button id="hm2" class="sub">${T('ホームへ')}</button>`}`;
+  if (B.online) return netEndInit();
   $('again').onclick = play; $('re').onclick = draft; $('hm2').onclick = home;
 }
 
 /* テスト用(ブラウザのコンソールから: __br.B など) */
-window.__br = { get B() { return B }, sim, spawn, strike, newBattle, setPicks(p) { picks = p }, setCpu(l) { cpuLevel = l }, setLanes(n) { laneCount = n }, levelUp };
-
-home();
+window.__br = { get B() { return B }, sim, spawn, strike, newBattle, setPicks(p) { picks = p }, setCpu(l) { cpuLevel = l }, setLanes(n) { laneCount = n }, levelUp, play, get ME() { return ME } };
