@@ -1,248 +1,221 @@
-/* BANNER RAID 本体(試作: ひとりで CPU と対戦)
+/* BANNER RAID 本体(v=2: キャラが相手の城へ攻めていくタイプ。ひとりで練習 = CPU対戦)
    画面: home(ホーム)→ draft(キャラ選び)→ play(対戦)→ end(結果)
-   盤面の計算は sim(dt) だけ。オンライン対戦にするときも、この部分はそれぞれのスマホで動かす。 */
+   - 戦場の計算は sim() だけ。1秒に30コマ(TICK)で進み、ランダムはシード付き(rng)。
+     オンライン対戦では「何コマ目に・だれが・何を出したか」だけをやりとりして、2人のスマホで同じ計算をする予定。
+   - 陣営: side 0 = 自分(下の城、道の 0)、side 1 = 相手(上の城、道の LANE)。 */
 
 const $ = id => document.getElementById(id);
 const app = $('app');
 const LS = { get(k) { try { return localStorage.getItem(k) } catch (e) { return null } }, set(k, v) { try { localStorage.setItem(k, v) } catch (e) { } } };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const FOOT = () => `<p class="dim foot"><a href="${sitePath('/')}">${T("Muddy's Games トップ")}</a>・<a href="${sitePath('/privacy.html')}">${T('プライバシーポリシー')}</a></p>`;
 
-/* ---------- 盤面(7×10マス)と道 ---------- */
-const COLS = 7, ROWS = 10;
-const WP = [[1, -0.6], [1, 2], [5, 2], [5, 5], [1, 5], [1, 8], [5, 8], [5, 9.5]];  // 道の曲がり角(マスの中心)
-const SEG = [];
-let PATH_LEN = 0;
-for (let i = 0; i < WP.length - 1; i++) {
-  const [x1, y1] = WP[i], [x2, y2] = WP[i + 1], L = Math.hypot(x2 - x1, y2 - y1);
-  SEG.push({ x1, y1, x2, y2, L, s: PATH_LEN }); PATH_LEN += L;
+/* 絵。?v= の番号は、この game.js を読んだときの番号と同じにする(キャッシュよけ) */
+const ASSET_V = ((document.currentScript && document.currentScript.src.match(/\?v=([^&#]+)/)) || [])[1] || '0';
+const IMG = {};
+function img(key) {
+  if (!IMG[key]) { const im = new Image(); im.src = (window.IMG_DATA && window.IMG_DATA[key]) || `img/${key}.png?v=${ASSET_V}`; IMG[key] = im; }
+  return IMG[key];
 }
-const PATH = new Set();
-for (const s of SEG) {
-  const n = Math.ceil(s.L * 4);
-  for (let k = 0; k <= n; k++) {
-    const c = Math.round(s.x1 + (s.x2 - s.x1) * k / n), r = Math.round(s.y1 + (s.y2 - s.y1) * k / n);
-    if (r >= 0 && r < ROWS) PATH.add(c + ',' + r);
-  }
-}
-const BASE = { c: 5, r: 9 };
-function posAt(d) {
-  for (const s of SEG) if (d <= s.s + s.L) { const t = (d - s.s) / s.L; return [s.x1 + (s.x2 - s.x1) * t, s.y1 + (s.y2 - s.y1) * t]; }
-  const s = SEG[SEG.length - 1]; return [s.x2, s.y2];
-}
-const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const imgSrc = key => img(key).src;
+UNIT_KEYS.forEach(img); Object.keys(ENEMIES).forEach(k => img('e-' + k));
 
-/* ---------- ゲームの状態 ---------- */
-let G = null;
+/* ---------- 計算のきまり ---------- */
+const TICK = 1 / 30;
+function makeRng(seed) {   // mulberry32(同じ種なら、どのスマホでも同じ並び)
+  let a = seed >>> 0;
+  return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+const DIR = [1, -1];
+const homeP = s => (s === 0 ? 0 : LANE);
+const fromHome = (s, p) => (s === 0 ? p : LANE - p);   // 自分の城からの長さ
+
+/* ---------- 対戦の状態 ---------- */
+let B = null;
 let picks = (LS.get('br-picks') || '').split(',').filter(k => UNITS[k]).slice(0, 4);
-let uid = 1;
+let cpuLevel = CPU_LEVELS[LS.get('br-cpu')] ? LS.get('br-cpu') : 'normal';
 
-function newGame() {
-  G = {
-    t: 0, coin: START_COIN, banner: BANNER_HP, cpu: BANNER_HP, speed: 1, paused: false, over: null,
-    units: [], enemies: [], fx: [], toasts: [], sent: [], queue: [],
-    wave: 0, nextWave: 4, passiveT: 0, cpuNext: 90, kills: 0, sel: null, place: null,
+function newBattle(seed) {
+  B = {
+    tick: 0, t: 0, rng: makeRng(seed || 1), uid: 1,
+    coin: [START_COIN, START_COIN], castle: [CASTLE_HP, CASTLE_HP], gauge: [0, 0],
+    cd: [{}, {}], deck: [picks.slice(), Object.keys(ENEMIES)], kind: ['u', 'e'],
+    rate: [1, CPU_LEVELS[cpuLevel]],
+    units: [], fx: [], over: null, kills: [0, 0], spent: [0, 0],
+    ai: { next: null, think: 0 },
+    speed: 1, paused: false,
   };
 }
+const defOf = (side, k) => (B.kind[side] === 'u' ? UNITS[k] : ENEMIES[k]);
 
-/* 野良の敵の波。n が大きいほど数も種類も増える */
-function makeWave(n) {
-  const list = [];
-  const cnt = 4 + Math.floor(n * 0.7);
-  for (let i = 0; i < cnt; i++) {
-    let k = 'goblin';
-    const r = (i * 7 + n * 3) % 10;
-    if (n >= 2 && r < 3) k = 'wolf';
-    if (n >= 3 && r === 9) k = 'skeleton';
-    if (n >= 4 && r === 5) k = 'orc';
-    if (n >= 6 && r === 4) k = 'skeleton';
-    if (n >= 8 && r === 3) k = 'orc';
-    list.push(k);
+/* 出撃 */
+function canSpawn(side, k) {
+  const d = defOf(side, k);
+  return d && !B.over && B.deck[side].includes(k) && B.coin[side] >= d.cost && !(B.cd[side][k] > 0);
+}
+function spawn(side, k) {
+  if (!canSpawn(side, k)) return false;
+  const d = defOf(side, k);
+  B.coin[side] -= d.cost; B.spent[side] += d.cost;
+  B.cd[side][k] = d.cd;
+  B.units.push({ id: B.uid++, side, k, d, p: homeP(side) + DIR[side] * 3, hp: d.hp, max: d.hp, atkT: 0.3, slowT: 0, x: B.rng() * 2 - 1, hitT: 0, act: 0 });
+  return true;
+}
+
+/* 城の一撃 */
+function strike(side) {
+  if (B.over || B.gauge[side] < STRIKE.charge) return false;
+  B.gauge[side] = 0;
+  for (const u of B.units) if (u.side !== side && u.hp > 0 && fromHome(side, u.p) <= STRIKE.reach) {
+    hurt(u, STRIKE.dmg, side);
+    u.p += DIR[1 - side] * -STRIKE.push;   // 城から遠ざける
+    u.p = Math.max(0, Math.min(LANE, u.p));
   }
-  return list;
-}
-function hpScale() {
-  let m = 1 + G.wave * 0.09;
-  if (G.t > RAMP_SEC) m *= 1 + (G.t - RAMP_SEC) / 60 * 0.3;
-  return m;
-}
-function spawn(k, assassin) {
-  const e = ENEMIES[k], m = assassin ? 1 + G.t / 240 : hpScale();
-  const hp = Math.round(e.hp * m);
-  G.enemies.push({ id: uid++, k, hp, max: hp, d: 0, x: WP[0][0], y: WP[0][1], slowT: 0, atkT: e.rate, by: null });
+  B.fx.push({ strike: side, t: 0.6 });
+  return true;
 }
 
-/* ---------- キャラの数値(レベル込み) ---------- */
-const st = u => UNITS[u.k];
-const uMax = u => Math.round(st(u).hp * Math.pow(LV_HP, u.lv - 1));
-const uPow = (u, v) => v * Math.pow(LV_POW, u.lv - 1);
-const lvCost = u => Math.round(st(u).cost * LVUP_COST * u.lv);
-const revCost = u => Math.round(st(u).cost * REVIVE_COST);
-const unitAt = (c, r) => G.units.find(u => u.c === c && u.r === r);
-
-function placeUnit(k, c, r) {
-  if (PATH.has(c + ',' + r) || unitAt(c, r) || G.coin < UNITS[k].cost) return false;
-  G.coin -= UNITS[k].cost;
-  const u = { id: uid++, k, c, r, x: c, y: r, lv: 1, hp: 0, cd: 0, down: 0, spent: UNITS[k].cost };
-  u.hp = uMax(u); G.units.push(u); return u;
+function hurt(u, v, bySide) {
+  if (u.hp <= 0) return;
+  u.hp -= v; u.hitT = 0.12;
+  if (u.hp <= 0) { u.dead = true; B.kills[bySide]++; B.coin[bySide] = Math.min(COIN_MAX, B.coin[bySide] + Math.round(u.d.cost * KILL_BONUS)); B.fx.push({ boom: true, p: u.p, x: u.x, t: 0.4 }); }
 }
-function levelUp(u) {
-  if (u.lv >= LV_MAX || G.coin < lvCost(u)) return;
-  const c = lvCost(u), ratio = u.hp / uMax(u);
-  G.coin -= c; u.spent += c; u.lv++; if (!u.down) u.hp = Math.round(uMax(u) * ratio);
-}
-function revive(u) { if (u.down && G.coin >= revCost(u)) { G.coin -= revCost(u); u.down = 0; u.hp = uMax(u); } }
-function sell(u) {
-  G.coin += Math.floor(u.spent * SELL_BACK);
-  for (const e of G.enemies) if (e.by === u.id) e.by = null;
-  G.units = G.units.filter(x => x !== u); G.sel = null;
-}
-function hurtUnit(u, v) {
-  if (u.down) return;
-  u.hp -= v;
-  if (u.hp <= 0) { u.hp = 0; u.down = REVIVE_SEC; for (const e of G.enemies) if (e.by === u.id) e.by = null; }
-}
-function hurtEnemy(e, v) { e.hp -= v; }
-
-function toast(msg, cls) { G.toasts.push({ msg, cls: cls || '', t: 2.6 }); }
-
-/* ---------- 刺客 ---------- */
-function sendAssassin() {
-  if (G.over || G.coin < ASSASSIN_COST) return;
-  G.coin -= ASSASSIN_COST;
-  G.sent.push({ t: 10 });
-  toast(T('🥷 刺客を送った！'), 'me');
-}
-/* CPU のがわは試作用の「にせもの」: 時間とともに守りが固くなり、刺客が止められやすくなる */
-function cpuGuard() { return Math.min(0.75, 0.2 + G.t / 700); }
 
 /* ---------- 1コマ進める ---------- */
-function sim(dt) {
-  if (G.over) return;
-  G.t += dt;
+function sim() {
+  if (B.over) return;
+  const dt = TICK;
+  B.tick++; B.t = B.tick * TICK;
 
-  // コイン(何もしなくても少しずつ)
-  G.passiveT += dt;
-  while (G.passiveT >= 2) { G.passiveT -= 2; G.coin += PASSIVE_COIN; }
-
-  // 野良の敵の波
-  G.nextWave -= dt;
-  if (G.nextWave <= 0) {
-    G.wave++; G.nextWave = G.t > RAMP_SEC ? WAVE_SEC * 0.75 : WAVE_SEC;
-    makeWave(G.wave).forEach((k, i) => G.queue.push({ k, t: i * 0.8 })); G.queue.sort((a, b) => a.t - b.t);
-    toast(T('第{n}波', { n: G.wave }));
+  for (const s of [0, 1]) {
+    let bonus = 0;
+    for (const u of B.units) if (u.side === s && u.hp > 0 && u.d.coin) bonus += u.d.coin;
+    B.coin[s] = Math.min(COIN_MAX, B.coin[s] + (COIN_PER_SEC * B.rate[s] + bonus) * dt);
+    B.gauge[s] = Math.min(STRIKE.charge, B.gauge[s] + dt);
+    for (const k in B.cd[s]) if (B.cd[s][k] > 0) B.cd[s][k] -= dt;
   }
-  for (const q of G.queue) q.t -= dt;
-  while (G.queue.length && G.queue[0].t <= 0) { const q = G.queue.shift(); spawn(q.k, q.a); }
+  if (B.cpu !== false) cpuThink(dt);
 
-  // CPU から来る刺客
-  G.cpuNext -= dt;
-  if (G.cpuNext <= 0) {
-    const two = G.t > RAMP_SEC;
-    spawn('assassin', true); if (two) { G.queue.push({ k: 'assassin', t: 1.2, a: 1 }); G.queue.sort((a, b) => a.t - b.t); }
-    G.cpuNext = Math.max(18, 45 - G.t / 15);
-    toast(T('⚠️ CPUが刺客を送ってきた！'), 'warn');
-  }
-  // 自分が送った刺客がCPUに着く
-  for (const s of G.sent) s.t -= dt;
-  while (G.sent.length && G.sent[0].t <= 0) {
-    G.sent.shift();
-    if (Math.random() < cpuGuard()) toast(T('🥷 刺客は止められた…'));
-    else { G.cpu = Math.max(0, G.cpu - ENEMIES.assassin.base); toast(T('🥷 CPUの旗に{n}ダメージ！', { n: ENEMIES.assassin.base }), 'good'); }
-  }
+  const live = B.units.filter(u => u.hp > 0);
+  for (const u of live) {
+    if (u.hp <= 0) continue;
+    const d = u.d, s = u.side, dir = DIR[s], o = 1 - s;
+    if (d.regen) u.hp = Math.min(u.max, u.hp + d.regen * dt);
+    if (u.slowT > 0) u.slowT -= dt;
+    if (u.hitT > 0) u.hitT -= dt;
+    const slowF = u.slowT > 0 ? 1 - (u.slowP || 0.45) : 1;
 
-  // キャラ
-  const alive = G.units.filter(u => !u.down);
-  for (const u of G.units) {
-    if (u.down) { u.down -= dt; if (u.down <= 0) { u.down = 0; u.hp = uMax(u); } continue; }
-    const s = st(u);
-    if (s.regen) u.hp = Math.min(uMax(u), u.hp + uPow(u, s.regen) * dt);
+    // 前にいる相手(前 = 自分の進む向き)。少しだけ重なっていても前とみなす
+    let near = null, nd = Infinity;
+    const foes = [];
+    for (const v of live) if (v.side === o && v.hp > 0) {
+      const g = (v.p - u.p) * dir;
+      if (g >= -1.5) { foes.push([v, g]); if (g < nd) { nd = g; near = v; } }
+    }
+    const castleGap = (homeP(o) - u.p) * dir;
+
     let haste = 1;
-    for (const b of alive) if (b !== u && UNITS[b.k].haste && dist(b, u) <= UNITS[b.k].range) haste = Math.max(haste, UNITS[b.k].haste + 0.1 * (b.lv - 1));
-    if (!s.rate) continue;
-    u.cd -= dt * haste;
-    if (u.cd > 0) continue;
+    for (const b of live) if (b.side === s && b !== u && b.d.haste && b.hp > 0 && Math.abs(b.p - u.p) <= b.d.range) haste = Math.max(haste, b.d.haste);
+    u.atkT -= dt * haste * (u.slowT > 0 ? 0.7 : 1);
 
-    if (s.coin) { const c = Math.round(uPow(u, s.coin)); G.coin += c; u.cd = s.rate; G.fx.push({ txt: '+' + c, x: u.x, y: u.y, t: 0.9 }); continue; }
-    if (s.heal) {
-      const near = alive.filter(o => dist(o, u) <= s.range && o.hp < uMax(o));
-      if (!near.length) continue;
-      const v = uPow(u, s.heal);
-      if (s.healAll) near.forEach(o => { o.hp = Math.min(uMax(o), o.hp + v); G.fx.push({ ring: '#4caf50', x: o.x, y: o.y, t: 0.4 }); });
-      else { const o = near.sort((a, b) => a.hp / uMax(a) - b.hp / uMax(b))[0]; o.hp = Math.min(uMax(o), o.hp + v); G.fx.push({ line: '#4caf50', x: u.x, y: u.y, x2: o.x, y2: o.y, t: 0.25 }); }
-      u.cd = s.rate; continue;
-    }
-    const inR = G.enemies.filter(e => e.hp > 0 && dist(e, u) <= s.range);
-    if (!inR.length) continue;
-    if (s.slow) {
-      inR.forEach(e => { e.slowT = 1.3; e.slowF = 1 - Math.min(0.7, s.slow + 0.05 * (u.lv - 1)); hurtEnemy(e, uPow(u, s.dmg)); });
-      G.fx.push({ ring: '#7cc8ff', x: u.x, y: u.y, r: s.range, t: 0.3 }); u.cd = s.rate; continue;
-    }
-    const tgt = s.target === 'maxhp' ? inR.sort((a, b) => b.hp - a.hp)[0] : inR.sort((a, b) => b.d - a.d)[0];
-    const v = uPow(u, s.dmg);
-    hurtEnemy(tgt, v);
-    if (s.splash) { for (const e of G.enemies) if (e !== tgt && dist(e, tgt) <= s.splash) hurtEnemy(e, v * 0.6); G.fx.push({ ring: '#b06cff', x: tgt.x, y: tgt.y, r: s.splash, t: 0.3 }); }
-    G.fx.push({ line: s.range > 1.5 ? '#ffd166' : '#fff', x: u.x, y: u.y, x2: tgt.x, y2: tgt.y, t: 0.15 });
-    u.cd = s.rate;
-  }
-
-  // 敵
-  const blockCount = {};
-  for (const e of G.enemies) if (e.by) blockCount[e.by] = (blockCount[e.by] || 0) + 1;
-  for (const e of G.enemies) {
-    if (e.hp <= 0) continue;
-    const s = ENEMIES[e.k];
-    let blk = e.by && G.units.find(u => u.id === e.by && !u.down);
-    if (!blk) {
-      e.by = null;
-      const cand = alive.filter(u => UNITS[u.k].block > 0 && (blockCount[u.id] || 0) < UNITS[u.k].block && dist(u, e) <= 1.05);
-      if (cand.length) {
-        blk = cand.sort((a, b) => (UNITS[b.k].taunt ? 1 : 0) - (UNITS[a.k].taunt ? 1 : 0))[0];
-        e.by = blk.id; blockCount[blk.id] = (blockCount[blk.id] || 0) + 1;
+    let stop = false;
+    if (d.coin) {
+      stop = fromHome(s, u.p) >= d.stopAt || nd <= 3;
+    } else if (d.heal) {
+      stop = nd <= d.range || castleGap <= d.range;
+      const hurtAllies = live.filter(a => a.side === s && a.hp > 0 && a.hp < a.max && Math.abs(a.p - u.p) <= d.range);
+      if (hurtAllies.length && u.atkT <= 0) {
+        if (d.healAll) hurtAllies.forEach(a => { a.hp = Math.min(a.max, a.hp + d.heal); B.fx.push({ ring: '#4caf50', p: a.p, x: a.x, t: 0.35 }); });
+        else { const a = hurtAllies.sort((a1, a2) => a1.hp / a1.max - a2.hp / a2.max || a1.id - a2.id)[0]; a.hp = Math.min(a.max, a.hp + d.heal); B.fx.push({ line: '#4caf50', p: u.p, x: u.x, p2: a.p, x2: a.x, t: 0.25 }); }
+        u.atkT = d.rate; u.act = 0.2;
       }
-    }
-    e.atkT -= dt;
-    if (blk) {
-      if (e.atkT <= 0) {
-        e.atkT = s.rate;
-        let v = s.dmg * (e.k === 'assassin' ? 1 + G.t / 400 : 1 + G.wave * 0.05);
-        hurtUnit(blk, v);
-        if (UNITS[blk.k].reflect) hurtEnemy(e, v * UNITS[blk.k].reflect);
+    } else if (d.haste) {
+      stop = nd <= d.range || castleGap <= d.range;
+    } else if (d.slow) {
+      stop = nd <= d.range || castleGap <= d.range;
+      const inR = foes.filter(([v, g]) => g <= d.range);
+      if (inR.length && u.atkT <= 0) {
+        inR.forEach(([v]) => { v.slowT = 1.5; v.slowP = d.slow; hurt(v, d.dmg, s); });
+        B.fx.push({ ring: '#7cc8ff', p: u.p, x: u.x, r: d.range, t: 0.3 });
+        u.atkT = d.rate; u.act = 0.2;
       }
     } else {
-      if (s.shoot && e.atkT <= 0) {
-        const tg = alive.filter(u => !u.down && dist(u, e) <= s.shoot).sort((a, b) => (UNITS[b.k].taunt ? 1 : 0) - (UNITS[a.k].taunt ? 1 : 0) || dist(a, e) - dist(b, e))[0];
-        if (tg) { e.atkT = s.rate; hurtUnit(tg, s.dmg); G.fx.push({ line: '#e57373', x: e.x, y: e.y, x2: tg.x, y2: tg.y, t: 0.15 }); }
+      // アタッカー・タンク・CPU軍: 射程に入った相手(または城)を攻撃
+      const inR = foes.filter(([v, g]) => g <= d.range);
+      const castleIn = castleGap <= d.range;
+      stop = inR.length > 0 || castleIn;
+      if (stop && u.atkT <= 0) {
+        let tgt = null;
+        if (d.sniper) tgt = castleIn ? 'castle' : inR.sort((a, b) => b[0].hp - a[0].hp || a[0].id - b[0].id)[0][0];
+        else tgt = inR.length ? inR.sort((a, b) => a[1] - b[1] || a[0].id - b[0].id)[0][0] : 'castle';
+        if (tgt === 'castle') {
+          B.castle[o] = Math.max(0, B.castle[o] - d.dmg);
+          B.fx.push({ line: d.range > 8 ? '#ffd166' : '#fff', p: u.p, x: u.x, p2: homeP(o), x2: u.x * 0.3, t: 0.15 });
+        } else {
+          hurt(tgt, d.dmg, s);
+          if (tgt.d.reflect) hurt(u, d.dmg * tgt.d.reflect, o);
+          if (d.splash) {
+            for (const [v] of foes) if (v !== tgt && Math.abs(v.p - tgt.p) <= d.splash) hurt(v, d.dmg * 0.6, s);
+            B.fx.push({ ring: '#b06cff', p: tgt.p, x: tgt.x, r: d.splash, t: 0.3 });
+          }
+          B.fx.push({ line: d.range > 8 ? '#ffd166' : '#fff', p: u.p, x: u.x, p2: tgt.p, x2: tgt.x, t: 0.15 });
+        }
+        u.atkT = d.rate; u.act = 0.2;
       }
-      if (e.slowT > 0) e.slowT -= dt;
-      e.d += s.spd * (e.slowT > 0 ? e.slowF : 1) * dt;
-      [e.x, e.y] = posAt(e.d);
-      if (e.d >= PATH_LEN) { G.banner -= s.base; e.hp = -1; e.gone = true; G.fx.push({ ring: '#e53935', x: BASE.c, y: BASE.r, r: 0.8, t: 0.4 }); }
+    }
+    if (u.act > 0) u.act -= dt;
+    // 進む(相手の体を通りぬけない・城の前で止まる)
+    if (!stop && nd > 2 && castleGap > 2) {
+      u.p += dir * d.spd * slowF * dt;
+      u.p = Math.max(0, Math.min(LANE, u.p));
     }
   }
-  for (const e of G.enemies) if (e.hp <= 0 && !e.gone) { G.coin += ENEMIES[e.k].coin; G.kills++; G.fx.push({ txt: '+' + ENEMIES[e.k].coin, x: e.x, y: e.y, t: 0.7 }); }
-  G.enemies = G.enemies.filter(e => e.hp > 0);
-  for (const e of G.enemies) if (e.by && !G.units.some(u => u.id === e.by)) e.by = null;
+  B.units = B.units.filter(u => u.hp > 0);
+  for (const f of B.fx) f.t -= dt;
+  B.fx = B.fx.filter(f => f.t > 0);
 
-  for (const f of G.fx) f.t -= dt;
-  G.fx = G.fx.filter(f => f.t > 0);
+  if (B.castle[0] <= 0 || B.castle[1] <= 0) B.over = B.castle[1] <= 0 && B.castle[0] > 0 ? 'win' : B.castle[0] <= 0 && B.castle[1] > 0 ? 'lose' : 'draw';
+  else if (B.t >= TIME_LIMIT) B.over = B.castle[0] > B.castle[1] ? 'win' : B.castle[0] < B.castle[1] ? 'lose' : 'draw';
+}
 
-  if (G.banner <= 0) { G.banner = 0; G.over = 'lose'; }
-  else if (G.cpu <= 0) G.over = 'win';
+/* ---------- CPU(ひとりで練習) ---------- */
+const AI_WEIGHT = { goblin: 30, wolf: 18, skeleton: 22, orc: 16, assassin: 12 };
+function cpuPick() {
+  const ks = Object.keys(AI_WEIGHT).filter(k => B.t > 40 || k !== 'assassin');
+  let sum = 0; for (const k of ks) sum += AI_WEIGHT[k];
+  let r = B.rng() * sum;
+  for (const k of ks) { r -= AI_WEIGHT[k]; if (r < 0) return k; }
+  return ks[0];
+}
+function cpuThink(dt) {
+  const A = B.ai;
+  A.think -= dt; if (A.think > 0) return;
+  A.think = 0.5;
+  // 城のまわりに相手が来たら、城の一撃
+  const close = B.units.filter(u => u.side === 0 && fromHome(1, u.p) <= STRIKE.reach);
+  const closeHp = close.reduce((a, u) => a + u.hp, 0);
+  if (B.gauge[1] >= STRIKE.charge && (close.length >= 3 || closeHp >= 900 || B.castle[1] < CASTLE_HP * 0.35 && close.length)) strike(1);
+  // 押されていたら、安いのを急いで出す
+  const danger = B.units.some(u => u.side === 0 && fromHome(1, u.p) <= 30);
+  if (danger && canSpawn(1, 'goblin') && B.rng() < 0.5) { spawn(1, 'goblin'); return; }
+  if (!A.next || B.cd[1][A.next] > 3) A.next = cpuPick();
+  if (canSpawn(1, A.next)) { spawn(1, A.next); A.next = null; }
 }
 
 /* ---------- 画面: ホーム ---------- */
 function home() {
   stopLoop();
   app.innerHTML = `
-  <h1 class="title">🚩 BANNER RAID</h1>
-  <div class="dim">${T('旗を守りながら、刺客を送りこめ！')}</div>
+  <h1 class="title">BANNER RAID</h1>
+  <div class="dim">${T('キャラを出撃させて、相手の城を落とせ！')}</div>
   ${langSwitchHtml()}
   <div class="card left">
     <div class="lbl">${T('遊び方')}</div>
     <div>${T('① 12体のキャラから4体を選ぶ')}</div>
-    <div>${T('② 道のそばにキャラを置いて、旗(🚩)を守る')}</div>
-    <div>${T('③ 敵を倒すとコイン。コインで「キャラを置く・強くする・刺客を送る」')}</div>
-    <div>${T('④ 相手の旗のHPを先に0にしたほうが勝ち')}</div>
+    <div>${T('② コインは時間でたまる。ボタンでキャラを出撃させる')}</div>
+    <div>${T('③ キャラは相手の城へ進み、ぶつかった敵と戦う')}</div>
+    <div>${T('④ ゲージがたまったら「城の一撃」で、城のまわりの敵を一気に攻撃')}</div>
+    <div>${T('⑤ 相手の城のHPを先に0にしたほうが勝ち(5分たったら、城のHPが多いほうの勝ち)')}</div>
   </div>
   <button id="solo" class="wide">${T('ひとりで練習(CPU対戦)')}</button>
   <button class="wide sub" disabled>${T('オンライン対戦(準備中)')}</button>
@@ -258,16 +231,18 @@ function draft() {
   const cards = UNIT_KEYS.map(k => {
     const u = UNITS[k], on = picks.includes(k);
     return `<button class="ucard ${on ? 'on' : ''} r-${u.role}" data-k="${k}">
-      <span class="ic">${u.icon}</span>
+      <img src="${imgSrc(k)}" alt="">
       <span class="nm">${T(u.name)}</span>
-      <span class="rl">${T(ROLE_NAME[u.role])}・${u.cost}💰</span>
+      <span class="rl">${T(ROLE_NAME[u.role])}・${u.cost}</span>
       <span class="ds">${T(u.desc)}</span>
     </button>`;
   }).join('');
+  const lv = ['easy', 'normal', 'hard'].map(l => `<button class="sub mini ${l === cpuLevel ? 'on' : ''}" data-lv="${l}">${T({ easy: 'かんたん', normal: 'ふつう', hard: 'むずかしい' }[l])}</button>`).join('');
   app.innerHTML = `
   <h1>${T('キャラを4体選ぶ')}</h1>
-  <div class="dim">${T('選んだ4体だけを、試合で置けます({n}/4)', { n: picks.length })}</div>
+  <div class="dim">${T('選んだ4体だけを、試合で出撃できます({n}/4)', { n: picks.length })}</div>
   <div class="ugrid">${cards}</div>
+  <div class="seg"><span class="dim small">${T('CPUの強さ')}</span> ${lv}</div>
   <button id="go" class="wide" ${picks.length === 4 ? '' : 'disabled'}>${T('出陣！')}</button>
   <button id="back" class="sub">${T('もどる')}</button>`;
   app.querySelectorAll('.ucard').forEach(b => b.onclick = () => {
@@ -275,185 +250,156 @@ function draft() {
     if (picks.includes(k)) picks = picks.filter(x => x !== k);
     else if (picks.length < 4) picks.push(k);
     else return;
-    draft();
+    const y = window.scrollY; draft(); window.scrollTo(0, y);
   });
+  app.querySelectorAll('[data-lv]').forEach(b => b.onclick = () => { cpuLevel = b.dataset.lv; LS.set('br-cpu', cpuLevel); const y = window.scrollY; draft(); window.scrollTo(0, y); });
   $('go').onclick = () => { LS.set('br-picks', picks.join(',')); play(); };
   $('back').onclick = home;
 }
 
 /* ---------- 画面: 対戦 ---------- */
-let cv, cx, CELL = 50, raf = 0, lastT = 0;
+let cv, cx, W = 360, H = 480, raf = 0, lastT = 0, acc = 0;
 function play() {
-  newGame();
+  newBattle((Date.now() & 0x7fffffff) | 1);
   app.innerHTML = `
   <div class="hud">
-    <span>🚩 <b id="hb">20</b></span>
-    <span class="vs">VS</span>
-    <span>CPU 🚩 <b id="hc">20</b></span>
-    <span class="coin">💰 <b id="hm">0</b></span>
-    <span class="dim" id="ht">0:00</span>
+    <div class="hp foe"><span>${T('相手の城')}</span><i><b id="hc"></b></i><em id="hcn"></em></div>
+    <div class="dim" id="ht">5:00</div>
   </div>
   <div class="board"><canvas id="cv"></canvas><div id="toasts"></div></div>
-  <div id="info" class="info"></div>
-  <div class="pal" id="pal"></div>
+  <div class="hud">
+    <div class="hp me"><span>${T('自分の城')}</span><i><b id="hb"></b></i><em id="hbn"></em></div>
+    <div class="coin">💰 <b id="hm">0</b></div>
+  </div>
+  <div class="pal">${picks.map(k => `<button class="pb r-${UNITS[k].role}" data-k="${k}"><img src="${imgSrc(k)}" alt=""><span>${UNITS[k].cost}</span><i class="cdv"></i></button>`).join('')}</div>
   <div class="row">
-    <button id="send" class="send">🥷 ${T('刺客を送る')} ${ASSASSIN_COST}💰</button>
+    <button id="strike" class="strike"><i id="gauge"></i><span>${T('城の一撃')}</span></button>
     <button id="spd" class="sub mini">▶︎×1</button>
     <button id="pause" class="sub mini">⏸</button>
+    <button id="quit" class="sub mini">✕</button>
   </div>`;
   cv = $('cv'); cx = cv.getContext('2d');
   resize();
-  $('pal').innerHTML = picks.map(k => `<button class="pb r-${UNITS[k].role}" data-k="${k}"><span class="ic">${UNITS[k].icon}</span><span>${UNITS[k].cost}💰</span></button>`).join('');
-  $('pal').querySelectorAll('.pb').forEach(b => b.onclick = () => { G.place = G.place === b.dataset.k ? null : b.dataset.k; G.sel = null; drawInfo(); });
-  $('send').onclick = sendAssassin;
-  $('spd').onclick = () => { G.speed = G.speed === 1 ? 2 : 1; $('spd').textContent = '▶︎×' + G.speed; };
-  $('pause').onclick = () => { G.paused = !G.paused; $('pause').textContent = G.paused ? '▶︎' : '⏸'; };
-  cv.onclick = onTap;
-  drawInfo();
-  lastT = performance.now();
+  app.querySelectorAll('.pb').forEach(b => b.onclick = () => { if (!spawn(0, b.dataset.k) && B.coin[0] < UNITS[b.dataset.k].cost) toast(T('コインが足りない')); });
+  $('strike').onclick = () => strike(0);
+  $('spd').onclick = () => { B.speed = B.speed === 1 ? 2 : 1; $('spd').textContent = '▶︎×' + B.speed; };
+  $('pause').onclick = () => { B.paused = !B.paused; $('pause').textContent = B.paused ? '▶︎' : '⏸'; };
+  $('quit').onclick = () => { B.over = 'quit'; };
+  lastT = performance.now(); acc = 0;
   raf = requestAnimationFrame(loop);
 }
+let toasts = [];
+function toast(msg) { toasts.push({ msg, t: 1.8 }); }
+
 function resize() {
-  const w = Math.min(app.clientWidth || 360, 460);
-  const h = Math.max(320, window.innerHeight - 270);
-  CELL = Math.floor(Math.min(w / COLS, h / ROWS));
+  W = Math.min(app.clientWidth || 360, 460);
+  H = Math.max(300, Math.min(W * 1.45, window.innerHeight - 250));
   const dpr = window.devicePixelRatio || 1;
-  cv.width = CELL * COLS * dpr; cv.height = CELL * ROWS * dpr;
-  cv.style.width = CELL * COLS + 'px'; cv.style.height = CELL * ROWS + 'px';
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  cv.style.width = W + 'px'; cv.style.height = H + 'px';
   cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  cx.imageSmoothingEnabled = false;
 }
-window.addEventListener('resize', () => { if (G && cv && document.body.contains(cv)) resize(); });
+window.addEventListener('resize', () => { if (B && cv && document.body.contains(cv)) resize(); });
 
 function stopLoop() { if (raf) cancelAnimationFrame(raf); raf = 0; }
 function loop(now) {
-  let dt = Math.min(0.1, (now - lastT) / 1000); lastT = now;
-  if (!G.paused && !G.over) { let n = Math.round(dt * G.speed / (1 / 60)); for (let i = 0; i < Math.max(1, n); i++) sim(1 / 60); }
-  for (const t of G.toasts) t.t -= dt;
-  G.toasts = G.toasts.filter(t => t.t > 0);
+  const dt = Math.min(0.1, (now - lastT) / 1000); lastT = now;
+  if (!B.paused && !B.over) { acc += dt * B.speed; while (acc >= TICK) { sim(); acc -= TICK; if (B.over) break; } }
+  for (const t of toasts) t.t -= dt;
+  toasts = toasts.filter(t => t.t > 0);
   draw(); hud();
-  if (G.over) { raf = 0; setTimeout(end, 700); return; }
+  if (B.over) { raf = 0; if (B.over === 'quit') home(); else setTimeout(end, 900); return; }
   raf = requestAnimationFrame(loop);
 }
 
-function onTap(ev) {
-  const r = cv.getBoundingClientRect();
-  const c = Math.floor((ev.clientX - r.left) / CELL), rr = Math.floor((ev.clientY - r.top) / CELL);
-  if (c < 0 || c >= COLS || rr < 0 || rr >= ROWS) return;
-  const u = unitAt(c, rr);
-  if (u) { G.sel = u.id; G.place = null; }
-  else if (G.place && !PATH.has(c + ',' + rr)) {
-    if (G.coin < UNITS[G.place].cost) toast(T('コインが足りない'));
-    else { placeUnit(G.place, c, rr); }
-  } else { G.sel = null; }
-  drawInfo();
-}
-
-/* 下の説明(置くキャラ / 選んだキャラ) */
-let infoKey = '';
-function drawInfo() {
-  const box = $('info'); if (!box) return;
-  const u = G.sel && G.units.find(x => x.id === G.sel);
-  document.querySelectorAll('.pb').forEach(b => b.classList.toggle('on', b.dataset.k === G.place));
-  if (u) {
-    const s = st(u);
-    infoKey = 'u' + u.id + ':' + u.lv + ':' + (u.down ? 1 : 0) + ':' + Math.floor(G.coin / 5);
-    box.innerHTML = `<b>${s.icon} ${T(s.name)} Lv${u.lv}</b> <span class="dim small">${T(s.desc)}</span>
-      <div class="row">
-        ${u.lv < LV_MAX ? `<button id="lv" class="mini" ${G.coin < lvCost(u) ? 'disabled' : ''}>⬆️ ${T('強くする')} ${lvCost(u)}💰</button>` : `<span class="dim small">${T('最大レベル')}</span>`}
-        ${u.down ? `<button id="rv" class="mini" ${G.coin < revCost(u) ? 'disabled' : ''}>💫 ${T('すぐ復活')} ${revCost(u)}💰</button>` : ''}
-        <button id="sl" class="mini sub">${T('下げる')} +${Math.floor(u.spent * SELL_BACK)}💰</button>
-      </div>`;
-    if ($('lv')) $('lv').onclick = () => { levelUp(u); drawInfo(); };
-    if ($('rv')) $('rv').onclick = () => { revive(u); drawInfo(); };
-    $('sl').onclick = () => { sell(u); drawInfo(); };
-  } else if (G.place) {
-    const s = UNITS[G.place]; infoKey = 'p' + G.place;
-    box.innerHTML = `<b>${s.icon} ${T(s.name)}</b> <span class="dim small">${T(s.desc)}</span><div class="dim small">${T('道のそばの空いたマスをタップして置く')}</div>`;
-  } else {
-    infoKey = 'none';
-    box.innerHTML = `<div class="dim small">${T('下のキャラを選んで、マスをタップして置く。置いたキャラをタップすると、強くできる')}</div>`;
-  }
-}
-
 function hud() {
-  $('hb').textContent = Math.max(0, G.banner);
-  $('hc').textContent = G.cpu;
-  $('hm').textContent = G.coin;
-  const s = Math.floor(G.t);
-  $('ht').textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
-  $('send').disabled = G.coin < ASSASSIN_COST;
-  document.querySelectorAll('.pb').forEach(b => b.classList.toggle('poor', G.coin < UNITS[b.dataset.k].cost));
-  // 選んでいるキャラの状態が変わったら、説明を書きなおす
-  const u = G.sel && G.units.find(x => x.id === G.sel);
-  const k = u ? 'u' + u.id + ':' + u.lv + ':' + (u.down ? 1 : 0) + ':' + Math.floor(G.coin / 5) : G.place ? 'p' + G.place : 'none';
-  if (k !== infoKey) drawInfo();
-  $('toasts').innerHTML = G.toasts.slice(-3).map(t => `<div class="toast ${t.cls}">${t.msg}</div>`).join('');
+  const pc = v => Math.max(0, v / CASTLE_HP * 100) + '%';
+  $('hb').style.width = pc(B.castle[0]); $('hc').style.width = pc(B.castle[1]);
+  $('hbn').textContent = Math.ceil(B.castle[0]); $('hcn').textContent = Math.ceil(B.castle[1]);
+  $('hm').textContent = Math.floor(B.coin[0]);
+  const left = Math.max(0, Math.ceil(TIME_LIMIT - B.t));
+  $('ht').textContent = Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0');
+  app.querySelectorAll('.pb').forEach(b => {
+    const k = b.dataset.k, cd = B.cd[0][k] || 0;
+    b.classList.toggle('poor', B.coin[0] < UNITS[k].cost);
+    b.querySelector('.cdv').style.height = (cd > 0 ? cd / UNITS[k].cd * 100 : 0) + '%';
+  });
+  const g = B.gauge[0] / STRIKE.charge;
+  $('gauge').style.width = g * 100 + '%';
+  $('strike').classList.toggle('ready', g >= 1);
+  $('toasts').innerHTML = toasts.slice(-2).map(t => `<div class="toast">${esc(t.msg)}</div>`).join('');
 }
 
-/* ---------- 盤面をかく ---------- */
-const X = c => (c + 0.5) * CELL, Y = r => (r + 0.5) * CELL;
+/* ---------- 戦場をかく ---------- */
+const TOP = () => H * 0.17, BOT = () => H * 0.9;
+const Y = p => BOT() - (p / LANE) * (BOT() - TOP());
+const X = x => W / 2 + x * W * 0.2;
 function draw() {
-  const W = CELL * COLS, H = CELL * ROWS;
   cx.fillStyle = '#5d8a4a'; cx.fillRect(0, 0, W, H);
-  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
-    if (PATH.has(c + ',' + r)) { cx.fillStyle = '#c9a66b'; cx.fillRect(c * CELL, r * CELL, CELL, CELL); }
-    else if ((c + r) % 2) { cx.fillStyle = 'rgba(0,0,0,.06)'; cx.fillRect(c * CELL, r * CELL, CELL, CELL); }
-  }
-  // 置ける場所
-  if (G.place) {
-    cx.strokeStyle = 'rgba(255,255,255,.35)'; cx.lineWidth = 1;
-    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (!PATH.has(c + ',' + r) && !unitAt(c, r)) cx.strokeRect(c * CELL + 3, r * CELL + 3, CELL - 6, CELL - 6);
-  }
-  cx.fillStyle = 'rgba(139,46,31,.35)'; cx.beginPath(); cx.arc(X(BASE.c), Y(BASE.r), CELL * 0.42, 0, 7); cx.fill();
-  cx.fillStyle = '#c62828'; emoji('🚩', BASE.c, BASE.r, 0.7);
-  // 選んだキャラの射程
-  const su = G.sel && G.units.find(x => x.id === G.sel);
-  if (su && st(su).range) { cx.strokeStyle = 'rgba(255,255,255,.7)'; cx.setLineDash([4, 4]); cx.beginPath(); cx.arc(X(su.x), Y(su.y), st(su).range * CELL, 0, 7); cx.stroke(); cx.setLineDash([]); }
-  // キャラ
-  for (const u of G.units) {
-    cx.globalAlpha = u.down ? 0.35 : 1;
-    cx.fillStyle = { atk: '#c0392b', tank: '#2c6fbb', heal: '#2e9e5b', sup: '#b8860b' }[st(u).role];
-    roundRect(u.c * CELL + 3, u.r * CELL + 3, CELL - 6, CELL - 6, 8); cx.fill();
-    emoji(st(u).icon, u.x, u.y, 0.55);
-    cx.globalAlpha = 1;
-    if (u.lv > 1) { cx.fillStyle = '#ffd700'; cx.font = `bold ${CELL * 0.22}px sans-serif`; cx.textAlign = 'left'; cx.fillText('★'.repeat(u.lv - 1), u.c * CELL + 5, u.r * CELL + CELL * 0.22); }
-    if (u.down) { cx.fillStyle = '#fff'; cx.font = `bold ${CELL * 0.3}px sans-serif`; cx.textAlign = 'center'; cx.fillText(Math.ceil(u.down), X(u.x), Y(u.y)); }
-    else bar(u.x, u.y + 0.38, u.hp / uMax(u), '#5cd65c');
-    if (u.id === G.sel) { cx.strokeStyle = '#fff'; cx.lineWidth = 2; roundRect(u.c * CELL + 2, u.r * CELL + 2, CELL - 4, CELL - 4, 8); cx.stroke(); }
-  }
-  // 敵
-  for (const e of G.enemies) {
-    emoji(ENEMIES[e.k].icon, e.x, e.y, e.k === 'assassin' || e.k === 'orc' ? 0.62 : 0.5);
-    if (e.slowT > 0) { cx.fillStyle = 'rgba(124,200,255,.35)'; cx.beginPath(); cx.arc(X(e.x), Y(e.y), CELL * 0.3, 0, 7); cx.fill(); }
-    bar(e.x, e.y - 0.38, e.hp / e.max, e.k === 'assassin' ? '#9b59b6' : '#e74c3c');
+  // 道
+  cx.fillStyle = '#c9a66b'; cx.fillRect(W * 0.2, 0, W * 0.6, H);
+  cx.fillStyle = 'rgba(0,0,0,.07)';
+  for (let i = 0; i < 12; i++) cx.fillRect(W * 0.2, (i * H) / 12, W * 0.6, 2);
+  // 城の一撃が届く範囲(ゲージがたまっているとき)
+  if (B.gauge[0] >= STRIKE.charge) { cx.fillStyle = 'rgba(255,215,0,.13)'; cx.fillRect(W * 0.2, Y(STRIKE.reach), W * 0.6, H - Y(STRIKE.reach)); }
+  castle(Y(LANE), 1); castle(Y(0), 0);
+  // キャラ(奥=上から順に)
+  const us = B.units.slice().sort((a, b) => Y(a.p) - Y(b.p) || a.id - b.id);
+  for (const u of us) {
+    const key = B.kind[u.side] === 'u' ? u.k : 'e-' + u.k, im = img(key);
+    const w = W * 0.27 * (u.d.size || 1), h = w * 100 / 176;
+    const x = X(u.x), y = Y(u.p) - (u.act > 0 ? (u.side ? -3 : 3) : 0);
+    if (u.slowT > 0) { cx.fillStyle = 'rgba(124,200,255,.35)'; cx.beginPath(); cx.ellipse(x, y, w * 0.3, h * 0.45, 0, 0, 7); cx.fill(); }
+    if (im.complete && im.naturalWidth) {
+      if (u.hitT > 0) cx.globalAlpha = 0.55;
+      cx.drawImage(im, x - w / 2, y - h / 2, w, h);
+      cx.globalAlpha = 1;
+    }
+    bar(x, y - h * 0.5 - 4, u.hp / u.max, u.side ? '#e74c3c' : '#3fa9f5', w * 0.5);
   }
   // 攻撃などの演出
-  for (const f of G.fx) {
+  for (const f of B.fx) {
     cx.globalAlpha = Math.min(1, f.t * 4);
-    if (f.line) { cx.strokeStyle = f.line; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(X(f.x), Y(f.y)); cx.lineTo(X(f.x2), Y(f.y2)); cx.stroke(); }
-    if (f.ring) { cx.strokeStyle = f.ring; cx.lineWidth = 2; cx.beginPath(); cx.arc(X(f.x), Y(f.y), (f.r || 0.45) * CELL, 0, 7); cx.stroke(); }
-    if (f.txt) { cx.fillStyle = '#ffe066'; cx.font = `bold ${CELL * 0.26}px sans-serif`; cx.textAlign = 'center'; cx.fillText(f.txt, X(f.x), Y(f.y) - (1 - f.t) * CELL * 0.5); }
+    if (f.line) { cx.strokeStyle = f.line; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(X(f.x), Y(f.p)); cx.lineTo(X(f.x2), Y(f.p2)); cx.stroke(); }
+    if (f.ring) { cx.strokeStyle = f.ring; cx.lineWidth = 2; cx.beginPath(); const r = (f.r ? f.r / LANE * (BOT() - TOP()) : W * 0.06); cx.ellipse(X(f.x), Y(f.p), Math.min(r, W * 0.3), r, 0, 0, 7); cx.stroke(); }
+    if (f.boom) { cx.fillStyle = '#fff3'; cx.beginPath(); cx.arc(X(f.x), Y(f.p), W * 0.07 * (1.4 - f.t), 0, 7); cx.fill(); }
+    if (f.strike !== undefined) {
+      const s = f.strike, y0 = Y(homeP(s)), y1 = Y(s === 0 ? STRIKE.reach : LANE - STRIKE.reach);
+      cx.fillStyle = 'rgba(255,200,40,.45)'; cx.fillRect(0, Math.min(y0, y1), W, Math.abs(y1 - y0));
+    }
     cx.globalAlpha = 1;
   }
 }
-function emoji(ch, x, y, size) { cx.font = `${CELL * size}px sans-serif`; cx.textAlign = 'center'; cx.textBaseline = 'middle'; cx.fillText(ch, X(x), Y(y) + CELL * 0.03); }
-function bar(x, y, p, col) {
-  const w = CELL * 0.7, h = Math.max(3, CELL * 0.07), px = X(x) - w / 2, py = Y(y) - h / 2;
-  cx.fillStyle = 'rgba(0,0,0,.5)'; cx.fillRect(px, py, w, h);
-  cx.fillStyle = col; cx.fillRect(px, py, w * Math.max(0, Math.min(1, p)), h);
+function castle(y, side) {
+  const w = W * 0.5, h = H * 0.07, x = W / 2 - w / 2, top = side ? y - h * 1.05 : y - h * 0.05;
+  cx.fillStyle = side ? '#5a1e1e' : '#3d4f6b';
+  cx.fillRect(x, top, w, h);
+  for (let i = 0; i < 5; i++) cx.fillRect(x + i * w / 4.5, top - h * 0.25, w / 9, h * 0.3);
+  cx.fillStyle = '#1b1410'; cx.fillRect(W / 2 - w * 0.08, top + h * 0.35, w * 0.16, h * 0.65);
+  // 旗
+  cx.strokeStyle = '#2b2018'; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(W / 2, top - h * 0.25); cx.lineTo(W / 2, top - h * 0.85); cx.stroke();
+  cx.fillStyle = side ? '#1a1a1a' : '#c62828'; cx.beginPath(); cx.moveTo(W / 2, top - h * 0.85); cx.lineTo(W / 2 + w * 0.22, top - h * 0.68); cx.lineTo(W / 2, top - h * 0.5); cx.fill();
 }
-function roundRect(x, y, w, h, r) { cx.beginPath(); cx.moveTo(x + r, y); cx.arcTo(x + w, y, x + w, y + h, r); cx.arcTo(x + w, y + h, x, y + h, r); cx.arcTo(x, y + h, x, y, r); cx.arcTo(x, y, x + w, y, r); cx.closePath(); }
+function bar(x, y, p, col, w) {
+  const h = 4, px = x - w / 2;
+  cx.fillStyle = 'rgba(0,0,0,.5)'; cx.fillRect(px, y, w, h);
+  cx.fillStyle = col; cx.fillRect(px, y, w * Math.max(0, Math.min(1, p)), h);
+}
 
 /* ---------- 画面: 結果 ---------- */
 function end() {
-  if (!G || !G.over) return;
-  const s = Math.floor(G.t), win = G.over === 'win';
+  if (!B || !B.over) return;
+  const s = Math.floor(B.t), r = B.over;
+  const ttl = r === 'win' ? T('🏆 勝利！') : r === 'lose' ? T('🏳️ 敗北…') : T('引き分け');
+  const why = B.castle[1] <= 0 ? T('相手の城を落とした！') : B.castle[0] <= 0 ? T('城を落とされた…') : T('時間切れ。城のHPでくらべた');
   app.innerHTML = `
-  <h1 class="title">${win ? T('🏆 勝利！') : T('🏳️ 敗北…')}</h1>
+  <h1 class="title">${ttl}</h1>
   <div class="card">
-    <div>${win ? T('CPUの旗を落とした！') : T('旗を守りきれなかった…')}</div>
-    <div class="dim">${T('時間 {m}分{s}秒・第{w}波・倒した敵 {k}', { m: Math.floor(s / 60), s: s % 60, w: G.wave, k: G.kills })}</div>
-    <div class="big">${picks.map(k => UNITS[k].icon).join(' ')}</div>
+    <div>${why}</div>
+    <div class="dim">${T('自分の城 {a} / 相手の城 {b}', { a: Math.ceil(B.castle[0]), b: Math.ceil(B.castle[1]) })}</div>
+    <div class="dim">${T('時間 {m}分{s}秒・倒した敵 {k}', { m: Math.floor(s / 60), s: s % 60, k: B.kills[0] })}</div>
+    <div class="team">${picks.map(k => `<img src="${imgSrc(k)}" alt="">`).join('')}</div>
   </div>
   <button id="again" class="wide">${T('同じキャラでもう一回')}</button>
   <button id="re" class="sub">${T('キャラを選びなおす')}</button>
@@ -461,7 +407,7 @@ function end() {
   $('again').onclick = play; $('re').onclick = draft; $('hm2').onclick = home;
 }
 
-/* テスト用(ブラウザのコンソールから: __br.G など) */
-window.__br = { get G() { return G }, sim, newGame, placeUnit, sendAssassin, levelUp, PATH, UNITS };
+/* テスト用(ブラウザのコンソールから: __br.B など) */
+window.__br = { get B() { return B }, sim, spawn, strike, newBattle, setPicks(p) { picks = p }, setCpu(l) { cpuLevel = l } };
 
 home();
