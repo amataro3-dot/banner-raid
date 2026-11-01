@@ -55,6 +55,7 @@ button.mini{padding:7px 10px;font-size:13px}
 .pb .cdv{position:absolute;left:0;right:0;bottom:0;height:0;background:rgba(0,0,0,.45);pointer-events:none}
 .pb.r-atk{border-bottom:4px solid var(--atk)}.pb.r-tank{border-bottom:4px solid var(--tank)}.pb.r-heal{border-bottom:4px solid var(--heal)}.pb.r-sup{border-bottom:4px solid var(--sup)}
 .pb.poor img{opacity:.45}
+.pb.on{border-color:var(--gold);box-shadow:0 0 0 3px var(--gold);background:color-mix(in srgb,var(--gold) 22%,var(--card))}
 .pb:active{transform:scale(.96)}
 .strike{position:relative;overflow:hidden;flex:1;background:#4a3a2a;color:#fff}
 .strike i{position:absolute;left:0;top:0;bottom:0;width:0;background:rgba(201,150,26,.55)}

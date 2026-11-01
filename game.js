@@ -34,10 +34,11 @@ const fromHome = (s, p) => (s === 0 ? p : LANE - p);   // 自分の城からの�
 let B = null;
 let picks = (LS.get('br-picks') || '').split(',').filter(k => UNITS[k]).slice(0, 4);
 let cpuLevel = CPU_LEVELS[LS.get('br-cpu')] ? LS.get('br-cpu') : 'normal';
+let laneCount = [1, 2, 3].includes(+LS.get('br-lanes')) ? +LS.get('br-lanes') : 1;   // 道の数(試し: 1〜3本)
 
 function newBattle(seed) {
   B = {
-    tick: 0, t: 0, rng: makeRng(seed || 1), uid: 1,
+    tick: 0, t: 0, rng: makeRng(seed || 1), uid: 1, lanes: laneCount, sel: null,
     coin: [START_COIN, START_COIN * 0.6], castle: [CASTLE_HP, CASTLE_HP], gauge: [0, 0],
     cd: [{}, {}], deck: [picks.slice(), Object.keys(ENEMIES)], kind: ['u', 'e'],
     rate: [1, CPU_LEVELS[cpuLevel]],
@@ -53,12 +54,13 @@ function canSpawn(side, k) {
   const d = defOf(side, k);
   return d && !B.over && B.deck[side].includes(k) && B.coin[side] >= d.cost && !(B.cd[side][k] > 0);
 }
-function spawn(side, k) {
+function spawn(side, k, lane) {
   if (!canSpawn(side, k)) return false;
   const d = defOf(side, k);
   B.coin[side] -= d.cost; B.spent[side] += d.cost;
   B.cd[side][k] = d.cd;
-  B.units.push({ id: B.uid++, side, k, d, p: homeP(side) + DIR[side] * 3, hp: d.hp, max: d.hp, atkT: 0.3, slowT: 0, x: B.rng() * 2 - 1, hitT: 0, act: 0 });
+  lane = Math.max(0, Math.min(B.lanes - 1, lane | 0));
+  B.units.push({ id: B.uid++, side, k, d, lane, p: homeP(side) + DIR[side] * 3, hp: d.hp, max: d.hp, atkT: 0.3, slowT: 0, x: B.rng() * 2 - 1, hitT: 0, act: 0 });
   return true;
 }
 
@@ -78,7 +80,7 @@ function strike(side) {
 function hurt(u, v, bySide) {
   if (u.hp <= 0) return;
   u.hp -= v; u.hitT = 0.12;
-  if (u.hp <= 0) { u.dead = true; B.kills[bySide]++; B.coin[bySide] = Math.min(COIN_MAX, B.coin[bySide] + Math.round(u.d.cost * KILL_BONUS)); B.fx.push({ boom: true, p: u.p, x: u.x, t: 0.4 }); }
+  if (u.hp <= 0) { u.dead = true; B.kills[bySide]++; B.coin[bySide] = Math.min(COIN_MAX, B.coin[bySide] + Math.round(u.d.cost * KILL_BONUS)); B.fx.push({ boom: true, p: u.p, x: u.x, l: u.lane, t: 0.4 }); }
 }
 
 /* ---------- 1コマ進める ---------- */
@@ -108,14 +110,14 @@ function sim() {
     // 前にいる相手(前 = 自分の進む向き)。少しだけ重なっていても前とみなす
     let near = null, nd = Infinity;
     const foes = [];
-    for (const v of live) if (v.side === o && v.hp > 0) {
+    for (const v of live) if (v.side === o && v.hp > 0 && v.lane === u.lane) {
       const g = (v.p - u.p) * dir;
       if (g >= -1.5) { foes.push([v, g]); if (g < nd) { nd = g; near = v; } }
     }
     const castleGap = (homeP(o) - u.p) * dir;
 
     let haste = 1;
-    for (const b of live) if (b.side === s && b !== u && b.d.haste && b.hp > 0 && Math.abs(b.p - u.p) <= b.d.range) haste = Math.max(haste, b.d.haste);
+    for (const b of live) if (b.side === s && b !== u && b.d.haste && b.hp > 0 && b.lane === u.lane && Math.abs(b.p - u.p) <= b.d.range) haste = Math.max(haste, b.d.haste);
     u.atkT -= dt * haste * (u.slowT > 0 ? 0.7 : 1);
 
     let stop = false;
@@ -123,10 +125,10 @@ function sim() {
       stop = fromHome(s, u.p) >= d.stopAt || nd <= 3;
     } else if (d.heal) {
       stop = nd <= d.range || castleGap <= d.range;
-      const hurtAllies = live.filter(a => a.side === s && a.hp > 0 && a.hp < a.max && Math.abs(a.p - u.p) <= d.range);
+      const hurtAllies = live.filter(a => a.side === s && a.hp > 0 && a.lane === u.lane && a.hp < a.max && Math.abs(a.p - u.p) <= d.range);
       if (hurtAllies.length && u.atkT <= 0) {
-        if (d.healAll) hurtAllies.forEach(a => { a.hp = Math.min(a.max, a.hp + d.heal); B.fx.push({ ring: '#4caf50', p: a.p, x: a.x, t: 0.35 }); });
-        else { const a = hurtAllies.sort((a1, a2) => a1.hp / a1.max - a2.hp / a2.max || a1.id - a2.id)[0]; a.hp = Math.min(a.max, a.hp + d.heal); B.fx.push({ line: '#4caf50', p: u.p, x: u.x, p2: a.p, x2: a.x, t: 0.25 }); }
+        if (d.healAll) hurtAllies.forEach(a => { a.hp = Math.min(a.max, a.hp + d.heal); B.fx.push({ ring: '#4caf50', p: a.p, x: a.x, l: u.lane, t: 0.35 }); });
+        else { const a = hurtAllies.sort((a1, a2) => a1.hp / a1.max - a2.hp / a2.max || a1.id - a2.id)[0]; a.hp = Math.min(a.max, a.hp + d.heal); B.fx.push({ line: '#4caf50', p: u.p, x: u.x, p2: a.p, x2: a.x, l: u.lane, t: 0.25 }); }
         u.atkT = d.rate; u.act = 0.2;
       }
     } else if (d.haste) {
@@ -136,7 +138,7 @@ function sim() {
       const inR = foes.filter(([v, g]) => g <= d.range);
       if (inR.length && u.atkT <= 0) {
         inR.forEach(([v]) => { v.slowT = 1.5; v.slowP = d.slow; hurt(v, d.dmg, s); });
-        B.fx.push({ ring: '#7cc8ff', p: u.p, x: u.x, r: d.range, t: 0.3 });
+        B.fx.push({ ring: '#7cc8ff', p: u.p, x: u.x, r: d.range, l: u.lane, t: 0.3 });
         u.atkT = d.rate; u.act = 0.2;
       }
     } else {
@@ -150,15 +152,15 @@ function sim() {
         else tgt = inR.length ? inR.sort((a, b) => a[1] - b[1] || a[0].id - b[0].id)[0][0] : 'castle';
         if (tgt === 'castle') {
           B.castle[o] = Math.max(0, B.castle[o] - d.dmg);
-          B.fx.push({ line: d.range > 8 ? '#ffd166' : '#fff', p: u.p, x: u.x, p2: homeP(o), x2: u.x * 0.3, t: 0.15 });
+          B.fx.push({ line: d.range > 8 ? '#ffd166' : '#fff', p: u.p, x: u.x, p2: homeP(o), x2: u.x * 0.3, l: u.lane, t: 0.15 });
         } else {
           hurt(tgt, d.dmg, s);
           if (tgt.d.reflect) hurt(u, d.dmg * tgt.d.reflect, o);
           if (d.splash) {
             for (const [v] of foes) if (v !== tgt && Math.abs(v.p - tgt.p) <= d.splash) hurt(v, d.dmg * 0.6, s);
-            B.fx.push({ ring: '#b06cff', p: tgt.p, x: tgt.x, r: d.splash, t: 0.3 });
+            B.fx.push({ ring: '#b06cff', p: tgt.p, x: tgt.x, r: d.splash, l: u.lane, t: 0.3 });
           }
-          B.fx.push({ line: d.range > 8 ? '#ffd166' : '#fff', p: u.p, x: u.x, p2: tgt.p, x2: tgt.x, t: 0.15 });
+          B.fx.push({ line: d.range > 8 ? '#ffd166' : '#fff', p: u.p, x: u.x, p2: tgt.p, x2: tgt.x, l: u.lane, t: 0.15 });
         }
         u.atkT = d.rate; u.act = 0.2;
       }
@@ -198,9 +200,21 @@ function cpuThink(dt) {
   if (B.gauge[1] >= STRIKE.charge && (close.length >= 3 || closeHp >= 900 || B.castle[1] < CASTLE_HP * 0.35 && close.length)) strike(1);
   // 押されていたら、安いのを急いで出す
   const danger = B.units.some(u => u.side === 0 && fromHome(1, u.p) <= 30);
-  if (danger && canSpawn(1, 'goblin') && B.rng() < 0.5) { spawn(1, 'goblin'); return; }
+  if (danger && canSpawn(1, 'goblin') && B.rng() < 0.5) { spawn(1, 'goblin', cpuLane(true)); return; }
   if (!A.next || B.cd[1][A.next] > 3) A.next = cpuPick();
-  if (canSpawn(1, A.next)) { spawn(1, A.next); A.next = null; }
+  if (canSpawn(1, A.next)) { spawn(1, A.next, cpuLane(false)); A.next = null; }
+}
+/* CPU が出す道: 押されている道を守る。ほかは、相手が強い道(+ランダム) */
+function cpuLane(defend) {
+  if (B.lanes === 1) return 0;
+  let best = 0, bs = -Infinity;
+  for (let l = 0; l < B.lanes; l++) {
+    let threat = 0, mine = 0;
+    for (const u of B.units) if (u.lane === l) { if (u.side === 0) threat += u.hp * (1 + (LANE - fromHome(1, u.p)) / LANE); else mine += u.hp; }
+    const sc = (defend ? threat * 2 : threat) - mine + B.rng() * 400;
+    if (sc > bs) { bs = sc; best = l; }
+  }
+  return best;
 }
 
 /* ---------- 画面: ホーム ---------- */
@@ -239,11 +253,13 @@ function draft() {
     </button>`;
   }).join('');
   const lv = ['easy', 'normal', 'hard'].map(l => `<button class="sub mini ${l === cpuLevel ? 'on' : ''}" data-lv="${l}">${T({ easy: 'かんたん', normal: 'ふつう', hard: 'むずかしい' }[l])}</button>`).join('');
+  const ln = [1, 2, 3].map(n => `<button class="sub mini ${n === laneCount ? 'on' : ''}" data-ln="${n}">${T('{n}本', { n })}</button>`).join('');
   app.innerHTML = `
   <h1>${T('キャラを4体選ぶ')}</h1>
   <div class="dim">${T('選んだ4体だけを、試合で出撃できます({n}/4)', { n: picks.length })}</div>
   <div class="ugrid">${cards}</div>
   <div class="seg"><span class="dim small">${T('CPUの強さ')}</span> ${lv}</div>
+  <div class="seg"><span class="dim small">${T('道の数')}</span> ${ln}</div>
   <button id="go" class="wide" ${picks.length === 4 ? '' : 'disabled'}>${T('出陣！')}</button>
   <button id="back" class="sub">${T('もどる')}</button>`;
   app.querySelectorAll('.ucard').forEach(b => b.onclick = () => {
@@ -254,6 +270,7 @@ function draft() {
     const y = window.scrollY; draft(); window.scrollTo(0, y);
   });
   app.querySelectorAll('[data-lv]').forEach(b => b.onclick = () => { cpuLevel = b.dataset.lv; LS.set('br-cpu', cpuLevel); const y = window.scrollY; draft(); window.scrollTo(0, y); });
+  app.querySelectorAll('[data-ln]').forEach(b => b.onclick = () => { laneCount = +b.dataset.ln; LS.set('br-lanes', laneCount); const y = window.scrollY; draft(); window.scrollTo(0, y); });
   $('go').onclick = () => { LS.set('br-picks', picks.join(',')); play(); };
   $('back').onclick = home;
 }
@@ -281,13 +298,27 @@ function play() {
   </div>`;
   cv = $('cv'); cx = cv.getContext('2d');
   resize();
-  app.querySelectorAll('.pb').forEach(b => b.onclick = () => { if (!spawn(0, b.dataset.k) && B.coin[0] < UNITS[b.dataset.k].cost) toast(T('コインが足りない')); });
+  app.querySelectorAll('.pb').forEach(b => b.onclick = () => {
+    const k = b.dataset.k;
+    if (B.lanes > 1) { B.sel = B.sel === k ? null : k; if (B.sel) toast(T('道をタップして出撃')); return; }
+    trySpawn(k, 0);
+  });
+  cv.onclick = ev => {
+    if (B.lanes === 1 || !B.sel) return;
+    const r = cv.getBoundingClientRect();
+    trySpawn(B.sel, Math.floor((ev.clientX - r.left) / r.width * B.lanes));
+  };
   $('strike').onclick = () => strike(0);
   $('spd').onclick = () => { B.speed = B.speed === 1 ? 2 : 1; $('spd').textContent = '▶︎×' + B.speed; };
   $('pause').onclick = () => { B.paused = !B.paused; $('pause').textContent = B.paused ? '▶︎' : '⏸'; };
   $('quit').onclick = () => { B.over = 'quit'; };
   lastT = performance.now(); acc = 0;
   raf = requestAnimationFrame(loop);
+}
+function trySpawn(k, lane) {
+  if (spawn(0, k, lane)) return;
+  if (B.coin[0] < UNITS[k].cost) toast(T('コインが足りない'));
+  else if (B.cd[0][k] > 0) toast(T('まだ出せない'));
 }
 let toasts = [];
 function toast(msg) { toasts.push({ msg, t: 1.8 }); }
@@ -324,6 +355,7 @@ function hud() {
   app.querySelectorAll('.pb').forEach(b => {
     const k = b.dataset.k, cd = B.cd[0][k] || 0;
     b.classList.toggle('poor', B.coin[0] < UNITS[k].cost);
+    b.classList.toggle('on', B.sel === k);
     b.querySelector('.cdv').style.height = (cd > 0 ? cd / UNITS[k].cd * 100 : 0) + '%';
   });
   const g = B.gauge[0] / STRIKE.charge;
@@ -335,22 +367,29 @@ function hud() {
 /* ---------- 戦場をかく ---------- */
 const TOP = () => H * 0.17, BOT = () => H * 0.9;
 const Y = p => BOT() - (p / LANE) * (BOT() - TOP());
-const X = x => W / 2 + x * W * 0.2;
+const ROAD = () => W * (B.lanes === 1 ? 0.6 : B.lanes === 2 ? 0.38 : 0.28);
+const laneX = l => W * (l + 0.5) / B.lanes;
+const X = (x, l) => laneX(l || 0) + x * ROAD() * 0.33;
+const SPR = () => W * (B.lanes === 1 ? 0.27 : B.lanes === 2 ? 0.21 : 0.17);
 function draw() {
   cx.fillStyle = '#5d8a4a'; cx.fillRect(0, 0, W, H);
   // 道
-  cx.fillStyle = '#c9a66b'; cx.fillRect(W * 0.2, 0, W * 0.6, H);
-  cx.fillStyle = 'rgba(0,0,0,.07)';
-  for (let i = 0; i < 12; i++) cx.fillRect(W * 0.2, (i * H) / 12, W * 0.6, 2);
+  for (let l = 0; l < B.lanes; l++) {
+    const rx = laneX(l) - ROAD() / 2;
+    cx.fillStyle = B.sel ? '#d8b77a' : '#c9a66b'; cx.fillRect(rx, 0, ROAD(), H);
+    cx.fillStyle = 'rgba(0,0,0,.07)';
+    for (let i = 0; i < 12; i++) cx.fillRect(rx, (i * H) / 12, ROAD(), 2);
+    if (B.sel) { cx.strokeStyle = 'rgba(255,255,255,.6)'; cx.setLineDash([6, 6]); cx.lineWidth = 2; cx.strokeRect(rx + 2, 2, ROAD() - 4, H - 4); cx.setLineDash([]); }
+  }
   // 城の一撃が届く範囲(ゲージがたまっているとき)
-  if (B.gauge[0] >= STRIKE.charge) { cx.fillStyle = 'rgba(255,215,0,.13)'; cx.fillRect(W * 0.2, Y(STRIKE.reach), W * 0.6, H - Y(STRIKE.reach)); }
+  if (B.gauge[0] >= STRIKE.charge) { cx.fillStyle = 'rgba(255,215,0,.13)'; cx.fillRect(0, Y(STRIKE.reach), W, H - Y(STRIKE.reach)); }
   castle(Y(LANE), 1); castle(Y(0), 0);
   // キャラ(奥=上から順に)
   const us = B.units.slice().sort((a, b) => Y(a.p) - Y(b.p) || a.id - b.id);
   for (const u of us) {
     const key = B.kind[u.side] === 'u' ? u.k : 'e-' + u.k, im = img(key);
-    const w = W * 0.27 * (u.d.size || 1), h = w * 100 / 176;
-    const x = X(u.x), y = Y(u.p) - (u.act > 0 ? (u.side ? -3 : 3) : 0);
+    const w = SPR() * (u.d.size || 1), h = w * 100 / 176;
+    const x = X(u.x, u.lane), y = Y(u.p) - (u.act > 0 ? (u.side ? -3 : 3) : 0);
     if (u.slowT > 0) { cx.fillStyle = 'rgba(124,200,255,.35)'; cx.beginPath(); cx.ellipse(x, y, w * 0.3, h * 0.45, 0, 0, 7); cx.fill(); }
     if (im.complete && im.naturalWidth) {
       if (u.hitT > 0) cx.globalAlpha = 0.55;
@@ -362,9 +401,9 @@ function draw() {
   // 攻撃などの演出
   for (const f of B.fx) {
     cx.globalAlpha = Math.min(1, f.t * 4);
-    if (f.line) { cx.strokeStyle = f.line; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(X(f.x), Y(f.p)); cx.lineTo(X(f.x2), Y(f.p2)); cx.stroke(); }
-    if (f.ring) { cx.strokeStyle = f.ring; cx.lineWidth = 2; cx.beginPath(); const r = (f.r ? f.r / LANE * (BOT() - TOP()) : W * 0.06); cx.ellipse(X(f.x), Y(f.p), Math.min(r, W * 0.3), r, 0, 0, 7); cx.stroke(); }
-    if (f.boom) { cx.fillStyle = '#fff3'; cx.beginPath(); cx.arc(X(f.x), Y(f.p), W * 0.07 * (1.4 - f.t), 0, 7); cx.fill(); }
+    if (f.line) { cx.strokeStyle = f.line; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(X(f.x, f.l), Y(f.p)); cx.lineTo(X(f.x2, f.l), Y(f.p2)); cx.stroke(); }
+    if (f.ring) { cx.strokeStyle = f.ring; cx.lineWidth = 2; cx.beginPath(); const r = (f.r ? f.r / LANE * (BOT() - TOP()) : W * 0.06); cx.ellipse(X(f.x, f.l), Y(f.p), Math.min(r, ROAD() * 0.5), r, 0, 0, 7); cx.stroke(); }
+    if (f.boom) { cx.fillStyle = '#fff3'; cx.beginPath(); cx.arc(X(f.x, f.l), Y(f.p), SPR() * 0.25 * (1.4 - f.t), 0, 7); cx.fill(); }
     if (f.strike !== undefined) {
       const s = f.strike, y0 = Y(homeP(s)), y1 = Y(s === 0 ? STRIKE.reach : LANE - STRIKE.reach);
       cx.fillStyle = 'rgba(255,200,40,.45)'; cx.fillRect(0, Math.min(y0, y1), W, Math.abs(y1 - y0));
@@ -373,7 +412,7 @@ function draw() {
   }
 }
 function castle(y, side) {
-  const w = W * 0.5, h = H * 0.07, x = W / 2 - w / 2, top = side ? y - h * 1.05 : y - h * 0.05;
+  const w = B.lanes === 1 ? W * 0.5 : W * 0.86, h = H * 0.07, x = W / 2 - w / 2, top = side ? y - h * 1.05 : y - h * 0.05;
   cx.fillStyle = side ? '#5a1e1e' : '#3d4f6b';
   cx.fillRect(x, top, w, h);
   for (let i = 0; i < 5; i++) cx.fillRect(x + i * w / 4.5, top - h * 0.25, w / 9, h * 0.3);
@@ -409,6 +448,6 @@ function end() {
 }
 
 /* テスト用(ブラウザのコンソールから: __br.B など) */
-window.__br = { get B() { return B }, sim, spawn, strike, newBattle, setPicks(p) { picks = p }, setCpu(l) { cpuLevel = l } };
+window.__br = { get B() { return B }, sim, spawn, strike, newBattle, setPicks(p) { picks = p }, setCpu(l) { cpuLevel = l }, setLanes(n) { laneCount = n } };
 
 home();
