@@ -36,56 +36,65 @@ let picks = (LS.get('br-picks') || '').split(',').filter(k => UNITS[k]).slice(0,
 let cpuLevel = CPU_LEVELS[LS.get('br-cpu')] ? LS.get('br-cpu') : 'normal';
 let laneCount = [1, 2, 3].includes(+LS.get('br-lanes')) ? +LS.get('br-lanes') : 2;   // 道の数(基本は2本。1本・3本も選べる)
 
-/* opt.online: { decks: [side0 の4体, side1 の4体], lanes } のときはオンライン対戦(CPU なし、2人とも同じ条件) */
+/* 対戦に出る人(プレイヤー)は B.pl。1人ずつ、陣営・コイン・待ち時間・レベル・4体を持つ。
+   陣営(side)は 0 と 1。城・城の一撃のゲージ・旗は陣営で共有(チーム戦では1つの陣営に何人もいる)。
+   opt.online: { players: [{ side, deck }, ...], lanes } のときはオンライン対戦(CPU なし)。
+   ひとりで練習: pl[0] = 自分(side 0)、pl[1] = CPU(side 1)。 */
 function newBattle(seed, opt) {
   const on = opt && opt.online, lanes = on ? on.lanes : laneCount;
+  const mk = (side, deck, coin, rate, kind) => ({ side, deck: deck.slice(), coin, rate, kind: kind || 'u', cd: {}, lv: {}, spent: 0 });
+  const pl = on ? on.players.map(p => mk(p.side, p.deck, START_COIN, 1))
+    : [mk(0, picks, START_COIN, 1), mk(1, [], START_COIN * 0.6, CPU_LEVELS[cpuLevel])];   // kind 'e' にすると CPU軍(ゴブリンたち)で戦う
+  const size = [0, 1].map(sd => Math.max(1, pl.filter(p => p.side === sd).length));
   B = {
-    tick: 0, t: 0, rng: makeRng(seed || 1), uid: 1, lanes,
-    coin: [START_COIN, on ? START_COIN : START_COIN * 0.6], castle: [CASTLE_HP, CASTLE_HP], gauge: [0, 0],
+    tick: 0, t: 0, rng: makeRng(seed || 1), uid: 1, lanes, pl,
+    castleMax: size.map(n => CASTLE_HP * n), castle: size.map(n => CASTLE_HP * n), gauge: [0, 0],
     flags: Array.from({ length: lanes }, () => ({ own: -1, prog: 0 })),   // prog: +1 で side 0、-1 で side 1 のもの
-    cd: [{}, {}], lv: [{}, {}], deck: on ? [on.decks[0].slice(), on.decks[1].slice()] : [picks.slice(), []], kind: ['u', 'u'],   // kind 'e' にすると CPU軍(ゴブリンたち)で戦う
-    rate: [1, on ? 1 : CPU_LEVELS[cpuLevel]], cpu: !on, online: !!on,
-    units: [], fx: [], over: null, kills: [0, 0], spent: [0, 0],
+    cpu: !on, online: !!on,
+    units: [], fx: [], over: null, kills: [0, 0],
     ai: { next: null, think: 0 },
     speed: 1, paused: false,
   };
-  if (!on) B.deck[1] = cpuDeck(B.rng);
+  if (!on) pl[1].deck = cpuDeck(B.rng);
 }
-const lvOf = (side, k) => B.lv[side][k] || 1;
+const sideOf = p => B.pl[p].side;
+const lvOf = (p, k) => B.pl[p].lv[k] || 1;
 /* いまのレベルの数値(CPU軍は HP・攻撃を ENEMY_LV 倍) */
-function defOf(side, k) {
-  if (B.kind[side] === 'u') return UNITS[k] && UNITS[k].stats[lvOf(side, k) - 1];
+function defOf(p, k) {
+  if (B.pl[p].kind === 'u') return UNITS[k] && UNITS[k].stats[lvOf(p, k) - 1];
   const e = ENEMIES[k]; if (!e) return null;
-  const m = ENEMY_LV[lvOf(side, k) - 1];
+  const m = ENEMY_LV[lvOf(p, k) - 1];
   return Object.assign({}, e, { hp: Math.round(e.hp * m), dmg: Math.round(e.dmg * m), img: 'e-' + k });
 }
-const upCost = (side, k) => (B.kind[side] === 'u' ? UNITS[k].up[lvOf(side, k) - 1] : Math.round(ENEMIES[k].cost * ENEMY_UP[lvOf(side, k) - 1]));
+const upCost = (p, k) => (B.pl[p].kind === 'u' ? UNITS[k].up[lvOf(p, k) - 1] : Math.round(ENEMIES[k].cost * ENEMY_UP[lvOf(p, k) - 1]));
 /* レベルアップ(これから出すキャラから強くなる) */
-function levelUp(side, k) {
-  if (B.over || !B.deck[side].includes(k) || lvOf(side, k) >= LV_MAX) return false;
-  const c = upCost(side, k);
-  if (B.coin[side] < c) return false;
-  B.coin[side] -= c; B.spent[side] += c;
-  B.lv[side][k] = lvOf(side, k) + 1;
+function levelUp(p, k) {
+  const P = B.pl[p];
+  if (B.over || !P || !P.deck.includes(k) || lvOf(p, k) >= LV_MAX) return false;
+  const c = upCost(p, k);
+  if (P.coin < c) return false;
+  P.coin -= c; P.spent += c;
+  P.lv[k] = lvOf(p, k) + 1;
   return true;
 }
 
 /* 出撃 */
-function canSpawn(side, k) {
-  const d = defOf(side, k);
-  return d && !B.over && B.deck[side].includes(k) && B.coin[side] >= d.cost && !(B.cd[side][k] > 0);
+function canSpawn(p, k) {
+  const P = B.pl[p]; if (!P) return false;
+  const d = defOf(p, k);
+  return d && !B.over && P.deck.includes(k) && P.coin >= d.cost && !(P.cd[k] > 0);
 }
-function spawn(side, k, lane) {
-  if (!canSpawn(side, k)) return false;
-  const d = defOf(side, k);
-  B.coin[side] -= d.cost; B.spent[side] += d.cost;
-  B.cd[side][k] = d.cd;
+function spawn(p, k, lane) {
+  if (!canSpawn(p, k)) return false;
+  const P = B.pl[p], d = defOf(p, k), side = P.side;
+  P.coin -= d.cost; P.spent += d.cost;
+  P.cd[k] = d.cd;
   lane = Math.max(0, Math.min(B.lanes - 1, lane | 0));
-  B.units.push({ id: B.uid++, side, k, d, lane, img: d.img, lv: lvOf(side, k), p: homeP(side) + DIR[side] * 3, hp: d.hp, max: d.hp, atkT: 0.3, slowT: 0, x: B.rng() * 2 - 1, hitT: 0, act: 0 });
+  B.units.push({ id: B.uid++, side, owner: p, k, d, lane, img: d.img, lv: lvOf(p, k), p: homeP(side) + DIR[side] * 3, hp: d.hp, max: d.hp, atkT: 0.3, slowT: 0, x: B.rng() * 2 - 1, hitT: 0, act: 0 });
   return true;
 }
 
-/* 城の一撃 */
+/* 城の一撃(陣営で1つのゲージ。チームのだれが撃ってもいい) */
 function strike(side, lane) {
   if (B.over || B.gauge[side] < STRIKE.charge) return false;
   lane = Math.max(0, Math.min(B.lanes - 1, lane | 0));
@@ -99,10 +108,16 @@ function strike(side, lane) {
   return true;
 }
 
+/* 倒したときのコインは、倒した陣営の人で分ける */
 function hurt(u, v, bySide) {
   if (u.hp <= 0) return;
   u.hp -= v; u.hitT = 0.12;
-  if (u.hp <= 0) { u.dead = true; B.kills[bySide]++; B.coin[bySide] = Math.min(COIN_MAX, B.coin[bySide] + Math.round(u.d.cost * KILL_BONUS)); B.fx.push({ boom: true, p: u.p, x: u.x, l: u.lane, t: 0.4 }); }
+  if (u.hp <= 0) {
+    u.dead = true; B.kills[bySide]++;
+    const team = B.pl.filter(P => P.side === bySide), c = Math.round(u.d.cost * KILL_BONUS / Math.max(1, team.length));
+    for (const P of team) P.coin = Math.min(COIN_MAX, P.coin + c);
+    B.fx.push({ boom: true, p: u.p, x: u.x, l: u.lane, t: 0.4 });
+  }
 }
 
 /* ---------- 1コマ進める ---------- */
@@ -112,14 +127,19 @@ function sim() {
   B.tick++; B.t = B.tick * TICK;
 
   for (const s of [0, 1]) {
-    let bonus = 0, fix = 0, boost = 0;
-    for (const u of B.units) if (u.side === s && u.hp > 0) { bonus += u.d.coin || 0; fix += u.d.repair || 0; boost += u.d.gauge || 0; }
-    for (const f of B.flags) if (f.own === s) bonus += FLAG.coin;
-    B.coin[s] = Math.min(COIN_MAX, B.coin[s] + (COIN_PER_SEC * B.rate[s] + bonus) * dt);
-    if (fix && B.castle[s] > 0) B.castle[s] = Math.min(CASTLE_HP, B.castle[s] + fix * dt);
+    let fix = 0, boost = 0;
+    for (const u of B.units) if (u.side === s && u.hp > 0) { fix += u.d.repair || 0; boost += u.d.gauge || 0; }
+    if (fix && B.castle[s] > 0) B.castle[s] = Math.min(B.castleMax[s], B.castle[s] + fix * dt);
     B.gauge[s] = Math.min(STRIKE.charge, B.gauge[s] + dt * (1 + Math.min(1, boost)));
-    for (const k in B.cd[s]) if (B.cd[s][k] > 0) B.cd[s][k] -= dt;
   }
+  // コインは1人ずつ(旗のぶんは、その陣営のみんなに)
+  B.pl.forEach((P, i) => {
+    let bonus = 0;
+    for (const u of B.units) if (u.owner === i && u.hp > 0) bonus += u.d.coin || 0;
+    for (const f of B.flags) if (f.own === P.side) bonus += FLAG.coin;
+    P.coin = Math.min(COIN_MAX, P.coin + (COIN_PER_SEC * P.rate + bonus) * dt);
+    for (const k in P.cd) if (P.cd[k] > 0) P.cd[k] -= dt;
+  });
   flagStep(dt);
   if (B.cpu) cpuThink(dt);
 
@@ -246,20 +266,20 @@ function cpuDeck(rng) {
 /* 役割ごとの出しやすさ。戦わないキャラは、出ていないときだけ */
 const AI_WEIGHT = { atk: 30, tank: 24, heal: 14, sup: 12 };
 function cpuPick() {
-  const ks = B.deck[1].filter(k => {
+  const ks = B.pl[1].deck.filter(k => {
     const st = UNITS[k].stats[0];
     if (st.coin || st.repair) return B.t > 15 && !B.units.some(u => u.side === 1 && u.k === k);
     if (st.heal || st.haste) return B.units.some(u => u.side === 1 && !u.d.heal && !u.d.haste && !u.d.coin && !u.d.repair);   // 前に立つ味方がいるときだけ
     return true;
   });
-  if (!ks.length) return B.deck[1][0];
+  if (!ks.length) return B.pl[1].deck[0];
   let sum = 0; for (const k of ks) sum += AI_WEIGHT[UNITS[k].role];
   let r = B.rng() * sum;
   for (const k of ks) { r -= AI_WEIGHT[UNITS[k].role]; if (r < 0) return k; }
   return ks[0];
 }
 /* 押されているときに急いで出す: いちばん安い、戦うキャラ */
-const cpuCheap = () => B.deck[1].filter(k => UNITS[k].role === 'atk' || UNITS[k].role === 'tank').sort((a, b) => UNITS[a].cost - UNITS[b].cost)[0];
+const cpuCheap = () => B.pl[1].deck.filter(k => UNITS[k].role === 'atk' || UNITS[k].role === 'tank').sort((a, b) => UNITS[a].cost - UNITS[b].cost)[0];
 function cpuThink(dt) {
   const A = B.ai;
   A.think -= dt; if (A.think > 0) return;
@@ -277,11 +297,11 @@ function cpuThink(dt) {
   const danger = B.units.some(u => u.side === 0 && fromHome(1, u.p) <= 30);
   const cheap = cpuCheap();
   if (danger && cheap && canSpawn(1, cheap) && B.rng() < 0.5) { spawn(1, cheap, cpuLane(true)); return; }
-  if (!A.next || B.cd[1][A.next] > 3) A.next = cpuPick();
+  if (!A.next || B.pl[1].cd[A.next] > 3) A.next = cpuPick();
   if (canSpawn(1, A.next)) { spawn(1, A.next, cpuLane(false)); A.next = null; return; }
   // コインがあまっていたら、ときどき強化
   if (B.t > 30 && B.rng() < 0.15) {
-    const ks = B.deck[1].filter(k => lvOf(1, k) < LV_MAX && B.coin[1] >= upCost(1, k) + 120);
+    const ks = B.pl[1].deck.filter(k => lvOf(1, k) < LV_MAX && B.pl[1].coin >= upCost(1, k) + 120);
     if (ks.length) levelUp(1, ks[Math.floor(B.rng() * ks.length)]);
   }
 }
@@ -316,7 +336,7 @@ function home() {
     <div>${T('⑥ 相手の城のHPを先に0にしたほうが勝ち(5分たったら、城のHPが多いほうの勝ち)')}</div>
   </div>
   <button id="solo" class="wide">${T('ひとりで練習(CPU対戦)')}</button>
-  ${window.NO_ONLINE ? `<button class="wide sub" disabled>${T('オンライン対戦は muddys-games.com で遊べます')}</button>` : `<button id="online" class="wide">${T('オンライン対戦(2人)')}</button>`}
+  ${window.NO_ONLINE ? `<button class="wide sub" disabled>${T('オンライン対戦は muddys-games.com で遊べます')}</button>` : `<button id="online" class="wide">${T('オンライン対戦(8人まで)')}</button>`}
   <div class="dim small">${T('試作版です。キャラの強さは、遊びながら調整します')}</div>
   ${FOOT()}`;
   langSwitchInit(() => { });
@@ -363,8 +383,8 @@ function draft(online) {
 
 /* ---------- 画面: 対戦 ---------- */
 let cv, cx, W = 360, H = 480, raf = 0, lastT = 0, acc = 0, intro = 0;
-let ME = 0;   // 自分の陣営(ひとりで練習とホストは 0、オンラインで入った人は 1)
-const foeName = () => (B && B.online ? netFoeName() : 'CPU');
+let ME = 0, MS = 0;   // ME = 自分のプレイヤー番号(B.pl の何番目。観戦は -1)、MS = 自分の陣営(画面は MS の城が下になる)
+const foeName = () => sideName(1 - MS);
 /* 自分の操作: ひとりで練習ならすぐ、オンラインなら少しあとのコマで2人同時に(net.js) */
 function act(a, k, lane) {
   if (B.online) return netSend(a, k, lane);
@@ -374,9 +394,9 @@ function act(a, k, lane) {
 }
 /* opt を渡すとオンライン対戦(newBattle の opt と同じ。opt.side が自分の陣営) */
 function play(opt) {
-  ME = opt ? opt.side : 0;
   newBattle(opt ? opt.seed : (Date.now() & 0x7fffffff) | 1, opt && { online: opt });
-  const deck = B.deck[ME];
+  ME = opt ? opt.me : 0; MS = opt ? opt.view : 0;
+  const spec = ME < 0, deck = spec ? [] : B.pl[ME].deck;   // 観戦のときは、出撃ボタンなし
   app.innerHTML = `
   <div class="hud">
     <div class="hp foe"><span>${T('相手の城')}</span><i><b id="hc"></b></i><em id="hcn"></em></div>
@@ -387,9 +407,10 @@ function play(opt) {
     <div class="hp me"><span>${T('自分の城')}</span><i><b id="hb"></b></i><em id="hbn"></em></div>
     <div class="coin">💰 <b id="hm">0</b></div>
   </div>
-  <div class="pal">${deck.map(k => `<div class="slot"><button class="pb r-${UNITS[k].role}" data-k="${k}"><img src="${imgSrc(UNITS[k].stats[0].img)}" alt=""><span><b class="lvb">Lv1</b> ${UNITS[k].cost}</span><i class="cdv"></i></button><button class="up" data-up="${k}">⬆<small></small></button></div>`).join('')}</div>
+  ${spec ? `<div class="spec">${T('観戦中')}${opt && opt.specNote ? ' ・ ' + esc(opt.specNote) : ''}</div>` : ''}
+  <div class="pal" ${spec ? 'hidden' : ''}>${deck.map(k => `<div class="slot"><button class="pb r-${UNITS[k].role}" data-k="${k}"><img src="${imgSrc(UNITS[k].stats[0].img)}" alt=""><span><b class="lvb">Lv1</b> ${UNITS[k].cost}</span><i class="cdv"></i></button><button class="up" data-up="${k}">⬆<small></small></button></div>`).join('')}</div>
   <div class="row">
-    <div class="strikes">${Array.from({ length: B.lanes }, (_, l) => `<button class="strike" data-sl="${l}"><i></i><span>${B.lanes === 1 ? T('城の一撃') : T('城の一撃') + ' ' + LANE_MARK[B.lanes][l]}</span></button>`).join('')}</div>
+    <div class="strikes" ${spec ? 'hidden' : ''}>${Array.from({ length: B.lanes }, (_, l) => `<button class="strike" data-sl="${l}"><i></i><span>${B.lanes === 1 ? T('城の一撃') : T('城の一撃') + ' ' + LANE_MARK[B.lanes][l]}</span></button>`).join('')}</div>
     ${B.online ? '' : `<button id="spd" class="sub mini">▶︎×1</button>
     <button id="pause" class="sub mini">⏸</button>`}
     <button id="quit" class="sub mini">✕</button>
@@ -401,8 +422,8 @@ function play(opt) {
     b.onpointerdown = ev => {
       const k = b.dataset.k;
       if (B.over || drag) return;
-      if (B.coin[ME] < UNITS[k].cost) { toast(T('コインが足りない')); return; }
-      if (B.cd[ME][k] > 0) { toast(T('まだ出せない')); return; }
+      if (B.pl[ME].coin < UNITS[k].cost) { toast(T('コインが足りない')); return; }
+      if (B.pl[ME].cd[k] > 0) { toast(T('まだ出せない')); return; }
       ev.preventDefault();
       try { b.setPointerCapture(ev.pointerId); } catch (e) { }
       const g = document.createElement('img');
@@ -418,20 +439,23 @@ function play(opt) {
   app.querySelectorAll('.up').forEach(b => b.onclick = () => {
     const k = b.dataset.up, before = UNITS[k].stats[lvOf(ME, k) - 1];
     if (lvOf(ME, k) >= LV_MAX) return;
-    if (B.coin[ME] < upCost(ME, k)) { toast(T('コインが足りない')); return; }
+    if (B.pl[ME].coin < upCost(ME, k)) { toast(T('コインが足りない')); return; }
     if (act('u', k, 0) === false) return;
     const after = UNITS[k].stats[lvOf(ME, k) - 1 + (B.online ? 1 : 0)];
     toast(after.img !== before.img ? T('{a} が {b} に進化！', { a: T(before.name), b: T(after.name) }) : T('{name} が Lv{n} に！', { name: T(after.name), n: lvOf(ME, k) + (B.online ? 1 : 0) }) + ' ' + T(after.desc));
   });
-  app.querySelectorAll('[data-sl]').forEach(b => b.onclick = () => { if (B.gauge[ME] < STRIKE.charge) { toast(T('ゲージがたまっていない')); return; } act('x', null, VL(+b.dataset.sl)); });
+  app.querySelectorAll('[data-sl]').forEach(b => b.onclick = () => { if (B.gauge[MS] < STRIKE.charge) { toast(T('ゲージがたまっていない')); return; } act('x', null, VL(+b.dataset.sl)); });
   if (!B.online) {
     $('spd').onclick = () => { B.speed = B.speed === 1 ? 2 : 1; $('spd').textContent = '▶︎×' + B.speed; };
     $('pause').onclick = () => { B.paused = !B.paused; $('pause').textContent = B.paused ? '▶︎' : '⏸'; };
   }
-  $('quit').onclick = () => { if (B.online) { if ($('quit').classList.contains('sure')) netLeave(); else { $('quit').classList.add('sure'); $('quit').textContent = T('本当に出る？'); } } else B.over = 'quit'; };
+  $('quit').onclick = () => {
+    if (B.online && ME < 0) return netStopWatch();   // 観戦をやめて、試合の一覧へ
+    if (B.online) { if ($('quit').classList.contains('sure')) netLeave(); else { $('quit').classList.add('sure'); $('quit').textContent = T('本当に出る？'); } } else B.over = 'quit';
+  };
   // 最初に、おたがいの4体を見せる(タップか3秒で始まる)
   intro = 3;
-  $('intro').innerHTML = `<div class="dim">${esc(foeName())}</div><div class="team foe">${teamImgs(1 - ME)}</div><div class="vs">VS</div><div class="team">${teamImgs(ME)}</div><div class="dim">${T('自分')}</div><div class="small">${T('タップでスタート')}</div>`;
+  $('intro').innerHTML = `<div class="dim">${esc(foeName())}</div><div class="team foe">${teamImgs(1 - MS)}</div><div class="vs">VS</div><div class="team">${teamImgs(MS)}</div><div class="dim">${esc(sideName(MS))}</div><div class="small">${T('タップでスタート')}</div>`;
   $('intro').onclick = () => { intro = 0; };
   lastT = performance.now(); acc = 0;
   raf = requestAnimationFrame(loop);
@@ -454,8 +478,8 @@ function dragEnd(ev, drop) {
 function trySpawn(k, lane) {
   lane = VL(lane);   // 画面の道 → 本当の道(相手側から見ているときは左右が逆)
   if (canSpawn(ME, k)) { act('s', k, lane); return; }
-  if (B.coin[ME] < UNITS[k].cost) toast(T('コインが足りない'));
-  else if (B.cd[ME][k] > 0) toast(T('まだ出せない'));
+  if (B.pl[ME].coin < UNITS[k].cost) toast(T('コインが足りない'));
+  else if (B.pl[ME].cd[k] > 0) toast(T('まだ出せない'));
 }
 let toasts = [];
 function toast(msg) { toasts.push({ msg, t: 1.8 }); }
@@ -478,7 +502,7 @@ function loop(now) {
   else if ($('intro') && !$('intro').hidden) $('intro').hidden = true;
   if (B.online) { if (!B.over && intro <= 0) netStep(dt); }
   else if (!B.paused && !B.over && intro <= 0) { acc += dt * B.speed; while (acc >= TICK) { sim(); acc -= TICK; if (B.over) break; } }
-  for (const f of B.fx) if (f.flagGet !== undefined && !f.told) { f.told = true; toast(f.flagGet === ME ? T('旗を取った！ コインが多くたまる') : T('旗を取られた…')); }
+  for (const f of B.fx) if (f.flagGet !== undefined && !f.told) { f.told = true; toast(f.flagGet === MS ? T('旗を取った！ コインが多くたまる') : T('旗を取られた…')); }
   for (const t of toasts) t.t -= dt;
   toasts = toasts.filter(t => t.t > 0);
   draw(); hud();
@@ -488,15 +512,15 @@ function loop(now) {
 }
 
 function hud() {
-  const pc = v => Math.max(0, v / CASTLE_HP * 100) + '%';
-  $('hb').style.width = pc(B.castle[ME]); $('hc').style.width = pc(B.castle[1 - ME]);
-  $('hbn').textContent = Math.ceil(B.castle[ME]); $('hcn').textContent = Math.ceil(B.castle[1 - ME]);
-  $('hm').textContent = Math.floor(B.coin[ME]);
+  const pc = (v, sd) => Math.max(0, v / B.castleMax[sd] * 100) + '%';
+  $('hb').style.width = pc(B.castle[MS], MS); $('hc').style.width = pc(B.castle[1 - MS], 1 - MS);
+  $('hbn').textContent = Math.ceil(B.castle[MS]); $('hcn').textContent = Math.ceil(B.castle[1 - MS]);
+  $('hm').textContent = ME < 0 ? '-' : Math.floor(B.pl[ME].coin);
   const left = Math.max(0, Math.ceil(TIME_LIMIT - B.t));
   $('ht').textContent = Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0');
-  app.querySelectorAll('.pb').forEach(b => {
-    const k = b.dataset.k, cd = B.cd[ME][k] || 0;
-    b.classList.toggle('poor', B.coin[ME] < UNITS[k].cost);
+  if (ME >= 0) app.querySelectorAll('.pb').forEach(b => {
+    const k = b.dataset.k, cd = B.pl[ME].cd[k] || 0;
+    b.classList.toggle('poor', B.pl[ME].coin < UNITS[k].cost);
     b.classList.toggle('on', !!drag && drag.k === k);
     b.querySelector('.cdv').style.height = (cd > 0 ? cd / UNITS[k].cd * 100 : 0) + '%';
     // レベルが変わったら、絵と Lv を書きかえる
@@ -507,25 +531,25 @@ function hud() {
       b.querySelector('.lvb').textContent = 'Lv' + lv;
     }
   });
-  app.querySelectorAll('.up').forEach(b => {
+  if (ME >= 0) app.querySelectorAll('.up').forEach(b => {
     const k = b.dataset.up, max = lvOf(ME, k) >= LV_MAX;
-    b.disabled = max || B.coin[ME] < upCost(ME, k) || (B.online && !!NET.pend['u' + k]);
+    b.disabled = max || B.pl[ME].coin < upCost(ME, k) || (B.online && !!NET.pend['u' + k]);
     b.classList.toggle('max', max);
     b.querySelector('small').textContent = max ? 'MAX' : upCost(ME, k);
   });
-  const g = B.gauge[ME] / STRIKE.charge;
+  const g = B.gauge[MS] / STRIKE.charge;
   app.querySelectorAll('[data-sl]').forEach(b => { b.querySelector('i').style.width = g * 100 + '%'; b.classList.toggle('ready', g >= 1); });
   $('toasts').innerHTML = toasts.slice(-2).map(t => `<div class="toast">${esc(t.msg)}</div>`).join('');
 }
 
 /* ---------- 戦場をかく ---------- */
 const TOP = () => H * 0.17, BOT = () => H * 0.9;
-const VP = p => (ME ? LANE - p : p);                 // 相手側から見ているときは上下が逆
-const VL = l => (ME && B ? B.lanes - 1 - l : l);     // 左右も逆(180度まわして見る)
+const VP = p => (MS ? LANE - p : p);                 // 相手側から見ているときは上下が逆
+const VL = l => (MS && B ? B.lanes - 1 - l : l);     // 左右も逆(180度まわして見る)
 const Y = p => BOT() - (VP(p) / LANE) * (BOT() - TOP());
 const ROAD = () => W * (B.lanes === 1 ? 0.6 : B.lanes === 2 ? 0.38 : 0.28);
 const laneX = l => W * (l + 0.5) / B.lanes;
-const X = (x, l) => laneX(VL(l || 0)) + (ME ? -x : x) * ROAD() * 0.33;
+const X = (x, l) => laneX(VL(l || 0)) + (MS ? -x : x) * ROAD() * 0.33;
 const SPR = () => W * (B.lanes === 1 ? 0.27 : B.lanes === 2 ? 0.21 : 0.17);
 function draw() {
   cx.fillStyle = '#5d8a4a'; cx.fillRect(0, 0, W, H);
@@ -539,17 +563,17 @@ function draw() {
     if (drag) { cx.strokeStyle = hot ? '#fff' : 'rgba(255,255,255,.5)'; cx.setLineDash(hot ? [] : [6, 6]); cx.lineWidth = hot ? 3 : 2; cx.strokeRect(rx + 2, 2, ROAD() - 4, H - 4); cx.setLineDash([]); }
   }
   // 城の一撃が届く範囲(ゲージがたまっているとき)
-  if (B.gauge[ME] >= STRIKE.charge) { cx.fillStyle = 'rgba(255,215,0,.16)'; const ry = Y(ME ? LANE - STRIKE.reach : STRIKE.reach); for (let l = 0; l < B.lanes; l++) cx.fillRect(laneX(l) - ROAD() / 2, ry, ROAD(), H - ry); }
+  if (B.gauge[MS] >= STRIKE.charge) { cx.fillStyle = 'rgba(255,215,0,.16)'; const ry = Y(MS ? LANE - STRIKE.reach : STRIKE.reach); for (let l = 0; l < B.lanes; l++) cx.fillRect(laneX(l) - ROAD() / 2, ry, ROAD(), H - ry); }
   for (let l = 0; l < B.lanes; l++) flagDraw(l);
-  castle(Y(homeP(1 - ME)), 1); castle(Y(homeP(ME)), 0);
+  castle(Y(homeP(1 - MS)), 1); castle(Y(homeP(MS)), 0);
   // キャラ(奥=上から順に)
   const us = B.units.slice().sort((a, b) => Y(a.p) - Y(b.p) || a.id - b.id);
   for (const u of us) {
     const im = img(u.img);
     const w = SPR() * (u.d.size || 1), h = w * 100 / 176;
-    const x = X(u.x, u.lane), y = Y(u.p) - (u.act > 0 ? (u.side !== ME ? -3 : 3) : 0);
+    const x = X(u.x, u.lane), y = Y(u.p) - (u.act > 0 ? (u.side !== MS ? -3 : 3) : 0);
     // 足もとの影: 自分は青、相手は赤
-    cx.fillStyle = u.side !== ME ? 'rgba(220,40,40,.55)' : 'rgba(40,130,230,.55)';
+    cx.fillStyle = u.side !== MS ? 'rgba(220,40,40,.55)' : 'rgba(40,130,230,.55)';
     cx.beginPath(); cx.ellipse(x - w * 0.08, y + h * 0.42, w * 0.26, h * 0.13, 0, 0, 7); cx.fill();
     if (u.slowT > 0) { cx.fillStyle = 'rgba(124,200,255,.35)'; cx.beginPath(); cx.ellipse(x, y, w * 0.3, h * 0.45, 0, 0, 7); cx.fill(); }
     if (im.complete && im.naturalWidth) {
@@ -557,7 +581,7 @@ function draw() {
       cx.drawImage(im, x - w / 2, y - h / 2, w, h);
       cx.globalAlpha = 1;
     }
-    bar(x, y - h * 0.5 - 4, u.hp / u.max, u.side !== ME ? '#e74c3c' : '#3fa9f5', w * 0.5);
+    bar(x, y - h * 0.5 - 4, u.hp / u.max, u.side !== MS ? '#e74c3c' : '#3fa9f5', w * 0.5);
   }
   // 攻撃などの演出
   for (const f of B.fx) {
@@ -576,13 +600,13 @@ function draw() {
 const LANE_MARK = { 2: ['◀', '▶'], 3: ['◀', '▲', '▶'] };
 const FLAG_COL = { '-1': '#f2efe6', 0: '#3fa9f5', 1: '#e74c3c' };
 function flagDraw(l) {
-  const f = B.flags[l], x = laneX(VL(l)), y = Y(FLAG.at), s = SPR(), prog = ME ? -f.prog : f.prog;
+  const f = B.flags[l], x = laneX(VL(l)), y = Y(FLAG.at), s = SPR(), prog = MS ? -f.prog : f.prog;
   // 取り合う範囲
   cx.fillStyle = 'rgba(255,255,255,.08)'; cx.fillRect(x - ROAD() / 2, Y(FLAG.at + FLAG.zone), ROAD(), Y(FLAG.at - FLAG.zone) - Y(FLAG.at + FLAG.zone));
   // 旗ざお と 旗
   const px = x + ROAD() * 0.42, top = y - s * 0.55;
   cx.strokeStyle = '#4a3a2a'; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(px, y + s * 0.1); cx.lineTo(px, top); cx.stroke();
-  cx.fillStyle = FLAG_COL[f.own < 0 ? -1 : f.own === ME ? 0 : 1]; cx.strokeStyle = 'rgba(0,0,0,.45)'; cx.lineWidth = 1;
+  cx.fillStyle = FLAG_COL[f.own < 0 ? -1 : f.own === MS ? 0 : 1]; cx.strokeStyle = 'rgba(0,0,0,.45)'; cx.lineWidth = 1;
   cx.beginPath(); cx.moveTo(px, top); cx.lineTo(px - s * 0.38, top + s * 0.13); cx.lineTo(px, top + s * 0.26); cx.closePath(); cx.fill(); cx.stroke();
   // どちらにかたむいているか(青 = 自分、赤 = 相手)
   const w = ROAD() * 0.5, bx = x - w / 2, by = y + s * 0.16;
@@ -607,28 +631,32 @@ function bar(x, y, p, col, w) {
 }
 
 /* ---------- 画面: 結果 ---------- */
-const teamImgs = side => B.deck[side].map(k => `<img src="${imgSrc(UNITS[k].stats[lvOf(side, k) - 1].img)}" alt="">`).join('');
+const teamImgs = side => B.pl.map((P, i) => P.side !== side ? '' : `<span class="tm">${P.deck.map(k => `<img src="${imgSrc(UNITS[k].stats[lvOf(i, k) - 1].img)}" alt="">`).join('')}</span>`).join('');
+/* 陣営の名前: ひとりで練習は「自分」「CPU」、オンラインは参加した人の名前(net.js) */
+const sideName = sd => (B && B.online ? netSideName(sd) : sd === 0 ? T('自分') : 'CPU');
 function end() {
   if (!B || !B.over) return;
-  const s = Math.floor(B.t), r0 = B.over;
-  const r = r0 === 'forfeit' ? 'win' : ME && r0 === 'win' ? 'lose' : ME && r0 === 'lose' ? 'win' : r0;
-  const ttl = r === 'win' ? T('🏆 勝利！') : r === 'lose' ? T('🏳️ 敗北…') : T('引き分け');
-  const why = r0 === 'forfeit' ? T('相手がいなくなった') : B.castle[1 - ME] <= 0 ? T('相手の城を落とした！') : B.castle[ME] <= 0 ? T('城を落とされた…') : T('時間切れ。城のHPでくらべた');
+  const s = Math.floor(B.t), r0 = B.over;   // B.over は side 0 から見た勝ち負け('win' / 'lose' / 'draw')
+  const spec = ME < 0;
+  const r = MS && r0 === 'win' ? 'lose' : MS && r0 === 'lose' ? 'win' : r0;
+  const winSide = r0 === 'win' ? 0 : r0 === 'lose' ? 1 : -1;
+  const ttl = spec ? (winSide < 0 ? T('引き分け') : T('{name} の勝ち！', { name: sideName(winSide) })) : r === 'win' ? T('🏆 勝利！') : r === 'lose' ? T('🏳️ 敗北…') : T('引き分け');
+  const why = B.forfeit ? T('相手がいなくなった') : B.castle[1 - MS] <= 0 ? T('相手の城を落とした！') : B.castle[MS] <= 0 ? T('城を落とされた…') : T('時間切れ。城のHPでくらべた');
   app.innerHTML = `
-  <h1 class="title">${ttl}</h1>
+  <h1 class="title">${esc(ttl)}</h1>
   <div class="card">
-    <div>${why}</div>
-    <div class="dim">${T('自分の城 {a} / 相手の城 {b}', { a: Math.ceil(B.castle[ME]), b: Math.ceil(B.castle[1 - ME]) })}</div>
-    <div class="dim">${T('時間 {m}分{s}秒・倒した敵 {k}', { m: Math.floor(s / 60), s: s % 60, k: B.kills[ME] })}</div>
-    <div class="vsrow"><span class="dim small">${T('自分')}</span><div class="team">${teamImgs(ME)}</div></div>
-    <div class="vsrow"><span class="dim small">${esc(foeName())}</span><div class="team foe">${teamImgs(1 - ME)}</div></div>
+    ${spec ? '' : `<div>${why}</div>`}
+    <div class="dim">${esc(sideName(MS))} ${Math.ceil(B.castle[MS])} / ${esc(sideName(1 - MS))} ${Math.ceil(B.castle[1 - MS])}</div>
+    <div class="dim">${T('時間 {m}分{s}秒・倒した敵 {k}', { m: Math.floor(s / 60), s: s % 60, k: B.kills[MS] })}</div>
+    <div class="vsrow"><span class="dim small">${esc(sideName(MS))}</span><div class="team">${teamImgs(MS)}</div></div>
+    <div class="vsrow"><span class="dim small">${esc(sideName(1 - MS))}</span><div class="team foe">${teamImgs(1 - MS)}</div></div>
   </div>
   ${B.online ? netEndButtons() : `<button id="again" class="wide">${T('同じキャラでもう一回')}</button>
   <button id="re" class="sub">${T('キャラを選びなおす')}</button>
   <button id="hm2" class="sub">${T('ホームへ')}</button>`}`;
   if (B.online) return netEndInit();
-  $('again').onclick = play; $('re').onclick = draft; $('hm2').onclick = home;
+  $('again').onclick = () => play(); $('re').onclick = () => draft(); $('hm2').onclick = home;
 }
 
 /* テスト用(ブラウザのコンソールから: __br.B など) */
-window.__br = { get B() { return B }, sim, spawn, strike, newBattle, setPicks(p) { picks = p }, setCpu(l) { cpuLevel = l }, setLanes(n) { laneCount = n }, levelUp, play, get ME() { return ME } };
+window.__br = { get B() { return B }, sim, spawn, strike, newBattle, setPicks(p) { picks = p }, setCpu(l) { cpuLevel = l }, setLanes(n) { laneCount = n }, levelUp, play, get ME() { return ME }, get MS() { return MS } };
