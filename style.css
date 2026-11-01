@@ -43,8 +43,9 @@ button.mini{padding:7px 10px;font-size:13px}
 .hp i{flex:1;height:10px;background:rgba(0,0,0,.18);border-radius:5px;overflow:hidden}
 .hp b{display:block;height:100%;width:100%;transition:width .2s}
 .hp.me b{background:#3fa9f5}.hp.foe b{background:#e74c3c}
-.hp em{font-style:normal;font-variant-numeric:tabular-nums;min-width:36px;text-align:right}
-.hud .coin{font-size:16px;font-weight:800;white-space:nowrap}.hud .coin b{color:var(--gold);font-variant-numeric:tabular-nums}
+.hp em{font-style:normal;font-variant-numeric:tabular-nums;width:4.4ch;text-align:right;flex:none}
+#ht{flex:none;width:3em;text-align:right;font-variant-numeric:tabular-nums}
+.hud .coin{flex:none;width:5.6em;text-align:right;font-size:16px;font-weight:800;white-space:nowrap}.hud .coin b{color:var(--gold);font-variant-numeric:tabular-nums}
 .board{position:relative;display:inline-block;margin:2px auto;border-radius:8px;overflow:hidden;border:3px solid #6b4f2e;line-height:0}
 #cv{display:block;touch-action:manipulation}
 #toasts{position:absolute;top:40%;left:0;right:0;display:flex;flex-direction:column;align-items:center;gap:4px;pointer-events:none;line-height:1.3}
