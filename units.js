@@ -2,7 +2,7 @@
    - 道の長さは 100(自分の城 0 → 相手の城 100)。range・spd もこの長さで数える(spd は 1秒に進む長さ)。
    - rate は「何秒に1回」。cd は出撃したあと、次に出せるまでの秒数。size は絵の大きさ(1 がふつう)。
    - キャラは lv[0]〜lv[2] が Lv1〜Lv3。Lv2・Lv3 は、前のレベルから変わるところだけ書く。
-     img・name を書いたレベルで進化する(絵と名前が変わる)。
+     img は、そのレベルの絵(v=18 からレベルごとにちがう絵)。name を書いたレベルで進化する(名前が変わる = 進化)。
    - レベルは試合中にコインで上げる。上げたあとに出すキャラから強くなる(もう出ているキャラはそのまま)。 */
 
 const LANE = 100;
@@ -43,44 +43,44 @@ const PERK_ICON = { coin: '💰', gauge: '⚡', power: '⚔' };
 const UNITS = {
   sword: { role: 'atk', cost: 60, cd: 3, up: [60, 120], lv: [
     { name: 'ソード', img: 'sword', hp: 230, dmg: 45, rate: 1.0, range: 6, spd: 9, desc: '近接。1体に大ダメージ。HPは低い。安くてすぐ出せる' },
-    { dmg: 60, desc: '攻撃力アップ' },
-    { crit: 0.25, desc: 'ときどき2倍ダメージ(会心の一撃)' } ] },
+    { img: 'sword2', dmg: 60, desc: '攻撃力アップ' },
+    { img: 'sword3', crit: 0.25, desc: 'ときどき2倍ダメージ(会心の一撃)' } ] },
   archer: { role: 'atk', cost: 65, cd: 4, up: [65, 130], lv: [
     { name: 'アーチャー', img: 'archer', hp: 150, dmg: 20, rate: 0.95, range: 22, spd: 8, desc: '遠くから速く撃つ' },
-    { rate: 0.7, desc: '撃つのが速くなる' },
+    { img: 'archer2', rate: 0.7, desc: '撃つのが速くなる' },
     { name: 'スナイパー', img: 'sniper', hp: 170, dmg: 130, rate: 2.6, range: 42, spd: 6, sniper: true, desc: '射程がとても長い。城やHPの多い敵をねらう' } ] },
   mage: { role: 'atk', cost: 100, cd: 8, up: [100, 200], lv: [
     { name: 'メイジ', img: 'mage', hp: 160, dmg: 45, rate: 1.8, range: 18, spd: 7, splash: 8, desc: 'まとめて攻撃。かたまった敵に強い' },
-    { splash: 12, desc: '攻撃の範囲が広がる' },
+    { img: 'mage2', splash: 12, desc: '攻撃の範囲が広がる' },
     { name: 'フロスト', img: 'frost', hp: 180, rate: 1.6, slowOnHit: 0.45, desc: 'まとめて攻撃して、敵を遅くする' } ] },
   lancer: { role: 'atk', cost: 70, cd: 4, up: [70, 140], lv: [
     { name: 'ランサー', img: 'lancer', hp: 220, dmg: 32, rate: 1.1, range: 10, spd: 8, pierce: 2, desc: '少し遠くから突く。前に並んだ2体に当たる' },
-    { dmg: 44, desc: '攻撃力アップ' },
-    { pierce: 3, desc: '前に並んだ3体までつらぬく' } ] },
+    { img: 'lancer2', dmg: 44, desc: '攻撃力アップ' },
+    { img: 'lancer3', pierce: 3, desc: '前に並んだ3体までつらぬく' } ] },
   knight: { role: 'tank', cost: 80, cd: 5, up: [80, 160], lv: [
     { name: 'ナイト', img: 'knight', hp: 700, dmg: 18, rate: 1.1, range: 6, spd: 7, desc: 'HPが高く、前で敵を止める。攻撃は弱い' },
-    { hp: 950, desc: 'HPアップ' },
+    { img: 'knight2', hp: 950, desc: 'HPアップ' },
     { name: 'パラディン', img: 'paladin', hp: 1100, dmg: 26, reflect: 0.3, regen: 8, desc: '受けたダメージの一部をはね返す。少しずつ自分も回復' } ] },
   golem: { role: 'tank', cost: 130, cd: 14, up: [130, 260], lv: [
     { name: 'ゴーレム', img: 'golem', hp: 1900, dmg: 32, rate: 1.6, range: 6, spd: 5, size: 1.25, desc: 'HPがとても多い。歩くのは遅い' },
-    { hp: 2500, desc: 'HPアップ' },
-    { splash: 8, desc: '攻撃がまわりの敵にも当たる(地ならし)' } ] },
+    { img: 'golem2', hp: 2500, desc: 'HPアップ' },
+    { img: 'golem3', splash: 8, desc: '攻撃がまわりの敵にも当たる(地ならし)' } ] },
   cleric: { role: 'heal', cost: 85, cd: 9, up: [85, 170], lv: [
     { name: 'クレリック', img: 'cleric', hp: 150, heal: 70, rate: 1.6, range: 18, spd: 7, desc: '味方1体を大きく回復' },
-    { heal: 95, desc: '回復量アップ' },
+    { img: 'cleric2', heal: 95, desc: '回復量アップ' },
     { name: 'シャーマン', img: 'shaman', hp: 190, heal: 30, healAll: true, rate: 1.3, range: 16, desc: 'まわりの味方をみんな回復' } ] },
   bard: { role: 'sup', cost: 55, cd: 8, up: [55, 110], lv: [
     { name: 'バード', img: 'bard', hp: 160, range: 14, spd: 7, haste: 1.4, dmg: 12, rate: 1.0, desc: 'まわりの味方の攻撃を速くする。自分も弱く攻撃する' },
-    { range: 20, desc: '効果の範囲が広がる' },
-    { haste: 1.5, hasteMove: 1.3, desc: '攻撃だけでなく、歩く速さも上がる' } ] },
+    { img: 'bard2', range: 20, desc: '効果の範囲が広がる' },
+    { img: 'bard3', haste: 1.5, hasteMove: 1.3, desc: '攻撃だけでなく、歩く速さも上がる' } ] },
   merchant: { role: 'sup', cost: 100, cd: 15, up: [100, 200], lv: [
     { name: 'マーチャント', img: 'merchant', hp: 220, range: 0, spd: 3, coin: 5, stopAt: 10, desc: '戦わない。出撃しているあいだ、コインのたまる速さが上がる' },
-    { coin: 8, desc: '稼ぐコインが増える' },
-    { coin: 12, cdCut: 0.3, desc: 'さらに増える。出撃の待ち時間も短くなる' } ] },
+    { img: 'merchant2', coin: 8, desc: '稼ぐコインが増える' },
+    { img: 'merchant3', coin: 12, cdCut: 0.3, desc: 'さらに増える。出撃の待ち時間も短くなる' } ] },
   engineer: { role: 'sup', cost: 80, cd: 12, up: [80, 160], lv: [
     { name: 'エンジニア', img: 'engineer', hp: 200, range: 0, spd: 3, repair: 12, stopAt: 6, build: true, desc: '戦わない。城が無事なら旗の手前にバリケードを建てて、もどる。城がけずられたら直す' },
-    { repair: 20, desc: '城を直す量が増える' },
-    { gauge: 0.5, desc: '城の一撃のゲージも速くたまる' } ] },
+    { img: 'engineer2', repair: 20, desc: '城を直す量が増える' },
+    { img: 'engineer3', gauge: 0.5, desc: '城の一撃のゲージも速くたまる' } ] },
 };
 const UNIT_KEYS = Object.keys(UNITS);
 

@@ -393,7 +393,7 @@ function home() {
 function draft(online) {
   stopLoop();
   const cards = UNIT_KEYS.map(k => {
-    const u = UNITS[k], on = picks.includes(k), a = u.stats[0], z = u.stats[2], evo = z.img !== a.img;
+    const u = UNITS[k], on = picks.includes(k), a = u.stats[0], z = u.stats[2], evo = z.name !== a.name;
     return `<button class="ucard ${on ? 'on' : ''} r-${u.role}" data-k="${k}">
       <img src="${imgSrc(a.img)}" alt="">
       <span class="nm">${T(a.name)}</span>
@@ -486,7 +486,7 @@ function play(opt) {
     if (B.pl[ME].coin < upCost(ME, k)) { toast(T('コインが足りない')); return; }
     if (act('u', k, 0) === false) return;
     const after = UNITS[k].stats[lvOf(ME, k) - 1 + (B.online ? 1 : 0)];
-    toast(after.img !== before.img ? T('{a} が {b} に進化！', { a: T(before.name), b: T(after.name) }) : T('{name} が Lv{n} に！', { name: T(after.name), n: lvOf(ME, k) + (B.online ? 1 : 0) }) + ' ' + T(after.desc));
+    toast(after.name !== before.name ? T('{a} が {b} に進化！', { a: T(before.name), b: T(after.name) }) : T('{name} が Lv{n} に！', { name: T(after.name), n: lvOf(ME, k) + (B.online ? 1 : 0) }) + ' ' + T(after.desc));
   });
   app.querySelectorAll('[data-sl]').forEach(b => b.onclick = () => { if (B.gauge[MS] < STRIKE.charge) { toast(T('ゲージがたまっていない')); return; } act('x', null, VL(+b.dataset.sl)); });
   if (!B.online) {
