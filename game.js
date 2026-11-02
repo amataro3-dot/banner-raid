@@ -750,18 +750,20 @@ function wallStrip(c, x, top, w, h) {
     cx.drawImage(im, 0, 0, im.naturalWidth * dw / tw, im.naturalHeight, x + i * tw, top, dw, h);
   }
 }
-/* せり出した城(短い道): 城から細い通路(レンガ)をのばし、先っぽに小さな城(城壁 + 門の塔)を立てる */
+/* せり出した城(短い道): その道の幅だけ、城の正面が前に出る。本体の城壁はそこだけ切り、先っぽまでレンガで埋めて、先っぽに城壁と門の塔 */
+const FORT_W = () => ROAD() * 0.95;
+const castleTop = (y, side) => (side ? y - H * 0.07 * 1.05 : y - H * 0.07 * 0.05);
 function bastion(l, sd, look) {
-  const c = look ? 'r' : 'b', x = laneX(VL(l)), y0 = Y(homeP(sd)), y1 = Y(homeP(sd, l));
-  const h = H * 0.07, cw = ROAD() * 0.5;
-  // 通路
-  const top = Math.min(y0, y1), hh = Math.abs(y1 - y0);
-  const p = pat('f-brick-' + c, h * 0.6, x - cw / 2, top);
+  const c = look ? 'r' : 'b', x = laneX(VL(l)), h = H * 0.07, ww = FORT_W();
+  const ct = castleTop(Y(homeP(sd)), look), y1 = Y(homeP(sd, l));
+  // 本体の城壁があった所から、先っぽまで
+  const a = look ? ct : y1, b = look ? y1 : ct + h;
+  const p = pat('f-brick-' + c, h * 0.6, x - ww / 2, a);
   cx.fillStyle = p || (look ? '#5a1e1e' : '#3d4f6b');
-  cx.fillRect(x - cw / 2, top, cw, hh);
-  cx.fillStyle = 'rgba(0,0,0,.85)'; cx.fillRect(x - cw / 2 - 1.5, top, 1.5, hh); cx.fillRect(x + cw / 2, top, 1.5, hh);
-  // 先っぽの小さな城(相手の城は下向き、自分の城は上向きにのびる)
-  const ww = ROAD() * 0.95, wh = h * 0.8, wtop = look ? y1 - wh : y1 - wh * 0.2;
+  cx.fillRect(x - ww / 2, a, ww, b - a);
+  cx.fillStyle = 'rgba(0,0,0,.85)'; cx.fillRect(x - ww / 2 - 1.5, a, 1.5, b - a); cx.fillRect(x + ww / 2, a, 1.5, b - a);
+  // 先っぽの城壁と門の塔(凸凹が相手のほうを向く)
+  const wh = h * 0.8, wtop = look ? y1 - wh : y1 - wh * 0.2;
   wallStrip(c, x - ww / 2, wtop, ww, wh);
   const im = img('f-tower-' + c);
   if (ready(im)) {
@@ -771,10 +773,16 @@ function bastion(l, sd, look) {
 }
 function castle(y, side) {
   const c = side ? 'r' : 'b';
-  const w = B.lanes === 1 ? W * 0.5 : W * 0.86, h = H * 0.07, x = W / 2 - w / 2, top = side ? y - h * 1.05 : y - h * 0.05;
-  wallStrip(c, x, top, w, h);
+  const w = B.lanes === 1 ? W * 0.5 : W * 0.86, h = H * 0.07, x = W / 2 - w / 2, top = castleTop(y, side);
+  // 城壁。せり出した道のところは切る
+  const cuts = [];
+  for (let l = 0; l < B.lanes; l++) if (cutOf(l)) { const cx0 = laneX(VL(l)); cuts.push([cx0 - FORT_W() / 2, cx0 + FORT_W() / 2]); }
+  cuts.sort((p, q) => p[0] - q[0]);
+  let from = x;
+  for (const [a, b] of cuts) { if (a > from) wallStrip(c, from, top, Math.min(a, x + w) - from, h); from = Math.max(from, b); }
+  if (from < x + w) wallStrip(c, from, top, x + w - from, h);
   // 真ん中に門の塔(下を城壁にそろえる)。真ん中の道がせり出しているときは、先っぽの塔があるので立てない
-  const mid = Array.from({ length: B.lanes }, (_, l) => l).some(l => cutOf(l) && Math.abs(laneX(l) - W / 2) < 1);
+  const mid = cuts.some(([a, b]) => a < W / 2 && W / 2 < b);
   const im = img('f-tower-' + c);
   if (ready(im) && !mid) {
     const th = h * 1.75, tw = th * im.naturalWidth / im.naturalHeight;
