@@ -750,24 +750,33 @@ function wallStrip(c, x, top, w, h) {
     cx.drawImage(im, 0, 0, im.naturalWidth * dw / tw, im.naturalHeight, x + i * tw, top, dw, h);
   }
 }
-/* せり出した城(短い道): 城のレンガで、道の幅に、城の前までのばす。先に城壁 */
+/* せり出した城(短い道): 城から細い通路(レンガ)をのばし、先っぽに小さな城(城壁 + 門の塔)を立てる */
 function bastion(l, sd, look) {
-  const c = look ? 'r' : 'b', x = laneX(VL(l)), w = ROAD() * 1.1, y0 = Y(homeP(sd)), y1 = Y(homeP(sd, l));
-  const top = Math.min(y0, y1), hh = Math.abs(y1 - y0), wh = H * 0.045;
-  const p = pat('f-brick-' + c, H * 0.07 * 0.6, x - w / 2, top);   // レンガの大きさを城壁とそろえる
+  const c = look ? 'r' : 'b', x = laneX(VL(l)), y0 = Y(homeP(sd)), y1 = Y(homeP(sd, l));
+  const h = H * 0.07, cw = ROAD() * 0.5;
+  // 通路
+  const top = Math.min(y0, y1), hh = Math.abs(y1 - y0);
+  const p = pat('f-brick-' + c, h * 0.6, x - cw / 2, top);
   cx.fillStyle = p || (look ? '#5a1e1e' : '#3d4f6b');
-  cx.fillRect(x - w / 2, top, w, hh);
-  cx.fillStyle = 'rgba(0,0,0,.85)'; cx.fillRect(x - w / 2 - 1.5, top, 1.5, hh); cx.fillRect(x + w / 2, top, 1.5, hh);
-  // 先っぽの城壁(凸凹が相手のほうを向く)
-  wallStrip(c, x - w / 2, look ? y1 - wh * 0.6 : y1 - wh * 0.4, w, wh);
+  cx.fillRect(x - cw / 2, top, cw, hh);
+  cx.fillStyle = 'rgba(0,0,0,.85)'; cx.fillRect(x - cw / 2 - 1.5, top, 1.5, hh); cx.fillRect(x + cw / 2, top, 1.5, hh);
+  // 先っぽの小さな城(相手の城は下向き、自分の城は上向きにのびる)
+  const ww = ROAD() * 0.95, wh = h * 0.8, wtop = look ? y1 - wh : y1 - wh * 0.2;
+  wallStrip(c, x - ww / 2, wtop, ww, wh);
+  const im = img('f-tower-' + c);
+  if (ready(im)) {
+    const th = h * 1.5, tw = th * im.naturalWidth / im.naturalHeight;
+    cx.drawImage(im, x - tw / 2, wtop + wh - th, tw, th);
+  }
 }
 function castle(y, side) {
   const c = side ? 'r' : 'b';
   const w = B.lanes === 1 ? W * 0.5 : W * 0.86, h = H * 0.07, x = W / 2 - w / 2, top = side ? y - h * 1.05 : y - h * 0.05;
   wallStrip(c, x, top, w, h);
-  // 真ん中に門の塔(下を城壁にそろえる)
+  // 真ん中に門の塔(下を城壁にそろえる)。真ん中の道がせり出しているときは、先っぽの塔があるので立てない
+  const mid = Array.from({ length: B.lanes }, (_, l) => l).some(l => cutOf(l) && Math.abs(laneX(l) - W / 2) < 1);
   const im = img('f-tower-' + c);
-  if (ready(im)) {
+  if (ready(im) && !mid) {
     const th = h * 1.75, tw = th * im.naturalWidth / im.naturalHeight;
     cx.drawImage(im, W / 2 - tw / 2, top + h - th, tw, th);
   }
