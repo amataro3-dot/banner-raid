@@ -596,14 +596,13 @@ const laneX = l => W * (l + 0.5) / B.lanes;
 const X = (x, l) => laneX(VL(l || 0)) + (MS ? -x : x) * ROAD() * 0.33;
 const SPR = () => W * (B.lanes === 1 ? 0.27 : B.lanes === 2 ? 0.21 : 0.17);
 function draw() {
-  cx.fillStyle = '#5d8a4a'; cx.fillRect(0, 0, W, H);
+  ground();
   // 道
   for (let l = 0; l < B.lanes; l++) {
     const rx = laneX(l) - ROAD() / 2;
     const hot = drag && drag.lane === l;
-    cx.fillStyle = hot ? '#e6c98f' : '#c9a66b'; cx.fillRect(rx, 0, ROAD(), H);
-    cx.fillStyle = 'rgba(0,0,0,.07)';
-    for (let i = 0; i < 12; i++) cx.fillRect(rx, (i * H) / 12, ROAD(), 2);
+    road(rx, ROAD());
+    if (hot) { cx.fillStyle = 'rgba(255,240,200,.35)'; cx.fillRect(rx, 0, ROAD(), H); }
     if (drag) { cx.strokeStyle = hot ? '#fff' : 'rgba(255,255,255,.5)'; cx.setLineDash(hot ? [] : [6, 6]); cx.lineWidth = hot ? 3 : 2; cx.strokeRect(rx + 2, 2, ROAD() - 4, H - 4); cx.setLineDash([]); }
   }
   // 城の一撃が届く範囲(ゲージがたまっているとき)
@@ -681,22 +680,97 @@ function fence(u) {
   cx.globalAlpha = 1;
   bar(x, y - h * 0.55 - 6, u.hp / u.max, u.side !== MS ? '#e74c3c' : '#3fa9f5', w * 0.6);
 }
-/* せり出した城(短い道): 城の色で、道の幅に、城の前までのばす */
+/* ---------- 地面と城の絵(v=19〜。Gemini の絵を切り分けたもの) ---------- */
+const FIELD_IMG = ['f-grass', 'f-road', 'f-tower-b', 'f-tower-r', 'f-wall-b', 'f-wall-r', 'f-brick-b', 'f-brick-r'];
+const PROPS = ['tree1', 'tree2', 'rock1', 'rock2', 'rock3', 'flower1', 'flower2', 'flower3', 'flower4', 'stump1', 'stump2', 'bush1', 'bush2', 'bush3'].map(k => 'f-' + k);
+FIELD_IMG.concat(PROPS).forEach(img);
+const ready = im => im.complete && im.naturalWidth > 0;
+const PAT = {};
+/* くり返しのもよう。tile = 1枚の幅(画面の px)、ox・oy = もようの始まり */
+function pat(key, tile, ox = 0, oy = 0) {
+  const im = img(key);
+  if (!ready(im)) return null;
+  const p = PAT[key] || (PAT[key] = cx.createPattern(im, 'repeat'));
+  const k = tile / im.naturalWidth;
+  p.setTransform(new DOMMatrix([k, 0, 0, k, ox, oy]));
+  return p;
+}
+/* 草地 + 飾り(道とかぶらない、すき間にだけ。並びは道の本数で決まる) */
+let propsKey = '', propsList = [];
+function ground() {
+  const g = pat('f-grass', Math.max(48, W * 0.18));
+  cx.fillStyle = g || '#6a8f5a'; cx.fillRect(0, 0, W, H);
+  const key = W + 'x' + H + 'x' + B.lanes;
+  if (key !== propsKey) { propsKey = key; propsList = makeProps(); }
+  for (const p of propsList) {
+    const im = img(p.k);
+    if (!ready(im)) continue;
+    const w = p.w, h = w * im.naturalHeight / im.naturalWidth;
+    cx.drawImage(im, p.x - w / 2, p.y - h, w, h);
+  }
+}
+function makeProps() {
+  const rng = makeRng(777 + B.lanes), out = [];
+  const gaps = [];   // 道と道のすき間(画面の左右のはしも)
+  let prev = 0;
+  for (let l = 0; l < B.lanes; l++) { const a = laneX(l) - ROAD() / 2; gaps.push([prev, a]); prev = a + ROAD(); }
+  gaps.push([prev, W]);
+  for (const [a, b] of gaps) {
+    const gw = b - a;
+    const big = gw > W * 0.12;     // 道1本のときの左右(広い)
+    const w0 = big ? Math.min(W * 0.12, gw * 0.7) : Math.max(W * 0.06, gw + ROAD() * 0.12);
+    const n = Math.round((BOT() - TOP()) / (w0 * (big ? 1.5 : 2.2)));
+    for (let i = 0; i < n; i++) {
+      if (!big && rng() < 0.35) continue;
+      const pool = big ? PROPS : PROPS.filter(k => /flower|bush|rock/.test(k));
+      const k = pool[Math.floor(rng() * pool.length)];
+      const w = w0 * (/tree/.test(k) ? 1.15 : /flower|bush/.test(k) ? 0.75 : 0.85) * (0.85 + rng() * 0.3);
+      const x = big ? a + w / 2 + rng() * Math.max(0, gw - w) : (a + b) / 2 + (rng() - 0.5) * gw * 0.3;
+      const y = TOP() + w * 0.8 + (i + 0.2 + rng() * 0.6) * ((BOT() - TOP() - w * 1.6) / n);
+      out.push({ k, x, y, w });
+    }
+  }
+  return out.sort((p, q) => p.y - q.y);
+}
+/* 土の道: 道の太さに合わせて、たてにしきつめる */
+function road(rx, w) {
+  const im = img('f-road');
+  if (!ready(im)) { cx.fillStyle = '#c9a66b'; cx.fillRect(rx, 0, w, H); return; }
+  for (let y = 0; y < H; y += w) cx.drawImage(im, rx, y, w, w);
+  cx.fillStyle = 'rgba(255,235,200,.14)'; cx.fillRect(rx, 0, w, H);   // 少し明るく(キャラを見やすく)
+  cx.fillStyle = 'rgba(0,0,0,.18)'; cx.fillRect(rx, 0, 2, H); cx.fillRect(rx + w - 2, 0, 2, H);
+}
+/* 城壁を横にならべる(x から w のはばで。top = 上のはし、h = 高さ) */
+function wallStrip(c, x, top, w, h) {
+  const im = img('f-wall-' + c);
+  if (!ready(im)) { cx.fillStyle = c === 'r' ? '#5a1e1e' : '#3d4f6b'; cx.fillRect(x, top, w, h); return; }
+  const tw = h * im.naturalWidth / im.naturalHeight;
+  for (let i = 0; i * tw < w; i++) {
+    const dw = Math.min(tw, w - i * tw);
+    cx.drawImage(im, 0, 0, im.naturalWidth * dw / tw, im.naturalHeight, x + i * tw, top, dw, h);
+  }
+}
+/* せり出した城(短い道): 城のレンガで、道の幅に、城の前までのばす。先に城壁 */
 function bastion(l, sd, look) {
-  const x = laneX(VL(l)), w = ROAD() * 1.1, y0 = Y(homeP(sd)), y1 = Y(homeP(sd, l));
-  cx.fillStyle = look ? '#5a1e1e' : '#3d4f6b';
-  cx.fillRect(x - w / 2, Math.min(y0, y1), w, Math.abs(y1 - y0));
-  for (let i = 0; i < 3; i++) cx.fillRect(x - w / 2 + i * w / 2.5, look ? y1 : y1 - H * 0.018, w / 5, H * 0.018);
+  const c = look ? 'r' : 'b', x = laneX(VL(l)), w = ROAD() * 1.1, y0 = Y(homeP(sd)), y1 = Y(homeP(sd, l));
+  const top = Math.min(y0, y1), hh = Math.abs(y1 - y0), wh = H * 0.045;
+  const p = pat('f-brick-' + c, H * 0.07 * 0.6, x - w / 2, top);   // レンガの大きさを城壁とそろえる
+  cx.fillStyle = p || (look ? '#5a1e1e' : '#3d4f6b');
+  cx.fillRect(x - w / 2, top, w, hh);
+  cx.fillStyle = 'rgba(0,0,0,.85)'; cx.fillRect(x - w / 2 - 1.5, top, 1.5, hh); cx.fillRect(x + w / 2, top, 1.5, hh);
+  // 先っぽの城壁(凸凹が相手のほうを向く)
+  wallStrip(c, x - w / 2, look ? y1 - wh * 0.6 : y1 - wh * 0.4, w, wh);
 }
 function castle(y, side) {
+  const c = side ? 'r' : 'b';
   const w = B.lanes === 1 ? W * 0.5 : W * 0.86, h = H * 0.07, x = W / 2 - w / 2, top = side ? y - h * 1.05 : y - h * 0.05;
-  cx.fillStyle = side ? '#5a1e1e' : '#3d4f6b';
-  cx.fillRect(x, top, w, h);
-  for (let i = 0; i < 5; i++) cx.fillRect(x + i * w / 4.5, top - h * 0.25, w / 9, h * 0.3);
-  cx.fillStyle = '#1b1410'; cx.fillRect(W / 2 - w * 0.08, top + h * 0.35, w * 0.16, h * 0.65);
-  // 旗
-  cx.strokeStyle = '#2b2018'; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(W / 2, top - h * 0.25); cx.lineTo(W / 2, top - h * 0.85); cx.stroke();
-  cx.fillStyle = side ? '#1a1a1a' : '#c62828'; cx.beginPath(); cx.moveTo(W / 2, top - h * 0.85); cx.lineTo(W / 2 + w * 0.22, top - h * 0.68); cx.lineTo(W / 2, top - h * 0.5); cx.fill();
+  wallStrip(c, x, top, w, h);
+  // 真ん中に門の塔(下を城壁にそろえる)
+  const im = img('f-tower-' + c);
+  if (ready(im)) {
+    const th = h * 1.75, tw = th * im.naturalWidth / im.naturalHeight;
+    cx.drawImage(im, W / 2 - tw / 2, top + h - th, tw, th);
+  }
 }
 function bar(x, y, p, col, w) {
   const h = 4, px = x - w / 2;
