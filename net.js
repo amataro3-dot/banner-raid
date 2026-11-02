@@ -49,7 +49,7 @@ function netInit() {
 
 /* ---------- 画面: オンラインのホーム ---------- */
 function netHome(err) {
-  stopLoop(); netScreen = 'home';
+  stopLoop(); netScreen = 'home'; guardRoom(false);
   app.innerHTML = `
   <h1 class="title">BANNER RAID</h1>
   <div class="dim">${T('オンライン対戦(8人まで)')}</div>
@@ -169,7 +169,7 @@ function netCheckGone() {
 const MODE_NAME = { floor: 'フロア式', tour: 'トーナメント', team: 'チーム戦' };
 const MODE_NOTE = { floor: 'A〜Dのフロアに2人ずつ座ると、そろったフロアがいっせいに始まる(座らない人は観戦)', tour: '入っている人で、くじびきのトーナメント。負けた人は観戦', team: '青と赤に分かれて戦う。城・城の一撃・旗はチームで共有。コインと4体は1人ずつ' };
 function netLobby() {
-  netScreen = 'lobby'; stopLoop();
+  netScreen = 'lobby'; stopLoop(); guardRoom(true);
   const order = netOrder(), host = netIsHost(), m = NET.meta, mode = m.mode || 'floor', me = NET.players[NET.uid];
   const modes = Object.keys(MODE_NAME).map(k => `<button class="sub mini ${k === mode ? 'on' : ''}" data-md="${k}" ${host ? '' : 'disabled'}>${T(MODE_NAME[k])}</button>`).join('');
   const ln = [1, 2, 3].map(n => `<button class="sub mini ${n === m.lanes ? 'on' : ''}" data-ln="${n}" ${host ? '' : 'disabled'}>${T('{n}本', { n })}</button>`).join('');
@@ -283,7 +283,7 @@ function netMenu(msg) {
   const m = NET.meta, host = netIsHost(), games = netCurGames();
   const key = 'menu:' + JSON.stringify([msg, m, games.map(([id, g]) => [id, g.result, allPicked(id)]), NET.tour, Object.keys(NET.players).length]);
   if (netScreen === key) return;
-  netScreen = key; stopLoop();
+  netScreen = key; stopLoop(); guardRoom(true);
   const status = (id, g) => g.result ? T('{name} の勝ち', { name: netWinnerIds(g).map(pname).join('・') }) + (g.result === 'd' ? T('(引き分け)') : '') : allPicked(id) ? T('対戦中') : T('キャラ選び中');
   const vs = g => gameSides(g).map(ids => ids.map(pname).map(esc).join('・')).join(' <span class="vs">VS</span> ');
   const list = games.map(([id, g]) => `<div class="gm ${g.result ? 'done' : ''}"><div><b>${esc(netLabel(g))}</b> ${vs(g)}</div><div class="dim small">${status(id, g)}</div>${!g.result && allPicked(id) ? `<button class="sub mini" data-watch="${id}">${T('観戦する')}</button>` : ''}</div>`).join('');

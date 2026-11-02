@@ -363,7 +363,7 @@ function cpuLane(defend) {
 
 /* ---------- 画面: ホーム ---------- */
 function home() {
-  stopLoop();
+  stopLoop(); guardRoom(false);
   app.innerHTML = `
   <h1 class="title">BANNER RAID</h1>
   <div class="dim">${T('キャラを出撃させて、相手の城を落とせ！')}</div>
@@ -388,10 +388,16 @@ function home() {
   if ($('online')) $('online').onclick = () => netHome();
 }
 
+/* ---------- 戻るボタンの確認(backguard.js) ---------- */
+/* 部屋の中なら「ルームから出ますか？」、そうでなければ「ホームに戻りますか？」 */
+function guardRoom(inRoom) { BackGuard.set(inRoom ? 'room' : 'home', inRoom ? netLeaveToEntry : null); }
+/* 部屋から出て、部屋に入る画面へ */
+async function netLeaveToEntry() { await netLeave(); netHome(); }
+
 /* ---------- 画面: キャラ選び ---------- */
 /* online を渡すと、オンライン対戦のキャラ選び(CPU の強さ・道の数はなし。「決定」で net.js へ) */
 function draft(online) {
-  stopLoop();
+  stopLoop(); guardRoom(!!online);
   const cards = UNIT_KEYS.map(k => {
     const u = UNITS[k], on = picks.includes(k), a = u.stats[0], z = u.stats[2], evo = z.name !== a.name;
     return `<button class="ucard ${on ? 'on' : ''} r-${u.role}" data-k="${k}">
@@ -440,6 +446,8 @@ function act(a, k, lane) {
 function play(opt) {
   newBattle(opt ? opt.seed : (Date.now() & 0x7fffffff) | 1, opt && { online: opt });
   ME = opt ? opt.me : 0; MS = opt ? opt.view : 0;
+  // 戻るボタン: ゲームをやめる(オンラインは部屋から出る。✕ と同じ)
+  BackGuard.set('game', opt ? netLeaveToEntry : () => { B.over = 'quit'; home(); });
   const spec = ME < 0, deck = spec ? [] : B.pl[ME].deck;   // 観戦のときは、出撃ボタンなし
   app.innerHTML = `
   <div class="hud">
@@ -801,6 +809,7 @@ const teamImgs = side => B.pl.map((P, i) => P.side !== side ? '' : `<span class=
 const sideName = sd => (B && B.online ? netSideName(sd) : sd === 0 ? T('自分') : 'CPU');
 function end() {
   if (!B || !B.over) return;
+  guardRoom(!!B.online);
   const s = Math.floor(B.t), r0 = B.over;   // B.over は side 0 から見た勝ち負け('win' / 'lose' / 'draw')
   const spec = ME < 0;
   const r = MS && r0 === 'win' ? 'lose' : MS && r0 === 'lose' ? 'win' : r0;
